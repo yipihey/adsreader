@@ -1,8 +1,52 @@
 // SciX Reader - Database Module (sql.js)
+// SQLite database using sql.js (in-memory with periodic saves to disk)
 
 const initSqlJs = require('sql.js');
 const fs = require('fs');
 const path = require('path');
+
+/**
+ * @typedef {Object} Paper
+ * @property {number} id - Primary key
+ * @property {string|null} bibcode - ADS bibcode
+ * @property {string|null} doi - DOI identifier
+ * @property {string|null} arxiv_id - arXiv ID (e.g., "2401.12345")
+ * @property {string} title - Paper title
+ * @property {string[]} authors - Array of author names
+ * @property {number|null} year - Publication year
+ * @property {string|null} journal - Journal name
+ * @property {string|null} abstract - Paper abstract
+ * @property {string[]} keywords - Array of keywords
+ * @property {string|null} pdf_path - Relative path to PDF
+ * @property {string|null} text_path - Relative path to extracted text
+ * @property {string|null} bibtex - BibTeX entry
+ * @property {string} read_status - "unread", "reading", or "read"
+ * @property {number} rating - 0-4 rating
+ * @property {string} added_date - ISO timestamp
+ * @property {string} modified_date - ISO timestamp
+ * @property {string|null} import_source - Source .bib file path
+ * @property {string|null} import_source_key - Original BibTeX key
+ * @property {boolean} [is_indexed] - Has embeddings (computed)
+ * @property {number} [annotation_count] - Number of annotations (computed)
+ * @property {number} [citation_count] - Number of citing papers (computed)
+ */
+
+/**
+ * @typedef {Object} GetAllPapersOptions
+ * @property {string} [readStatus] - Filter by read status
+ * @property {string} [search] - Search term for title/authors/abstract
+ * @property {string} [orderBy] - Column to sort by (default: "added_date")
+ * @property {string} [order] - Sort direction: "ASC" or "DESC" (default: "DESC")
+ * @property {number} [limit] - Maximum number of results
+ */
+
+/**
+ * @typedef {Object} SearchResult
+ * @property {Paper} paper - The matching paper
+ * @property {number} matchCount - Relevance score
+ * @property {string} matchSource - Where match was found: "title", "authors", "abstract", "fulltext", "field"
+ * @property {string} context - Snippet showing match context
+ */
 
 let db = null;
 let dbPath = null;
@@ -215,6 +259,11 @@ function closeDatabase() {
 
 // Paper operations
 
+/**
+ * Add a new paper to the database
+ * @param {Partial<Paper>} paper - Paper data (id, added_date, modified_date are auto-generated)
+ * @returns {number} The ID of the newly created paper
+ */
 function addPaper(paper) {
   const now = new Date().toISOString();
   const stmt = db.prepare(`
@@ -343,6 +392,12 @@ function addPapersBulk(papers, progressCallback = null) {
   return { inserted, skipped };
 }
 
+/**
+ * Update paper fields
+ * @param {number} id - Paper ID
+ * @param {Partial<Paper>} updates - Fields to update (authors/keywords can be arrays)
+ * @param {boolean} [save=true] - Whether to save database immediately
+ */
 function updatePaper(id, updates, save = true) {
   const fields = [];
   const values = [];
@@ -399,6 +454,11 @@ function getPaperByBibcode(bibcode) {
   return null;
 }
 
+/**
+ * Get all papers with optional filtering and sorting
+ * @param {GetAllPapersOptions} [options={}] - Query options
+ * @returns {Paper[]} Array of papers with computed fields (is_indexed, annotation_count, citation_count)
+ */
 function getAllPapers(options = {}) {
   let query = `
     SELECT p.*,
@@ -468,6 +528,13 @@ function parseSearchQuery(query) {
   return { fields, generalTerms };
 }
 
+/**
+ * Full-text search across papers, including PDF text files
+ * Supports field-specific queries like "author:Smith year:2020 dark matter"
+ * @param {string} searchTerm - Search query (supports field:value syntax)
+ * @param {string} libraryPath - Path to library folder (for reading text files)
+ * @returns {SearchResult[]} Results sorted by relevance (matchCount descending)
+ */
 function searchPapersFullText(searchTerm, libraryPath) {
   console.log('searchPapersFullText called:', searchTerm, libraryPath);
   const results = [];

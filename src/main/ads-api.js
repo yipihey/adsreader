@@ -1,9 +1,64 @@
 // SciX Reader - NASA ADS/SciX API Module
+// Integration with NASA ADS (Astrophysics Data System) API
 
 const https = require('https');
 
 const ADS_HOST = 'api.adsabs.harvard.edu';
 const ADS_BASE_PATH = '/v1';
+
+/**
+ * @typedef {Object} ADSDocument
+ * @property {string} bibcode - ADS bibcode identifier
+ * @property {string[]} title - Paper title (array with single element)
+ * @property {string[]} author - Author names
+ * @property {string} year - Publication year (string)
+ * @property {string[]} [doi] - DOI identifier(s)
+ * @property {string} [pub] - Journal/publication name
+ * @property {string} [abstract] - Paper abstract
+ * @property {string[]} [keyword] - Keywords
+ * @property {string[]} [identifier] - All identifiers (arXiv, bibcode, etc.)
+ * @property {string[]} [arxiv_class] - arXiv categories
+ */
+
+/**
+ * @typedef {Object} SearchOptions
+ * @property {string} [fields] - Comma-separated field list (default: standard metadata fields)
+ * @property {number} [rows] - Number of results (default: 25)
+ * @property {number} [start] - Result offset (default: 0)
+ * @property {string} [sort] - Sort order (default: "date desc")
+ */
+
+/**
+ * @typedef {Object} EsourceRecord
+ * @property {string} title - URL as title
+ * @property {string} url - Full URL to resource
+ * @property {string} link_type - Type like "ESOURCE|EPRINT_PDF", "ESOURCE|PUB_PDF", "ESOURCE|ADS_PDF"
+ */
+
+/**
+ * @typedef {Object} SmartSearchMetadata
+ * @property {string} [title] - Paper title for matching
+ * @property {string} [firstAuthor] - First author surname
+ * @property {number|string} [year] - Publication year
+ * @property {string} [journal] - Journal name
+ */
+
+// Stats tracking for sync progress
+let syncStats = { bytesReceived: 0, requestCount: 0 };
+
+function resetSyncStats() {
+  syncStats = { bytesReceived: 0, requestCount: 0 };
+}
+
+function getSyncStats() {
+  return { ...syncStats };
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
 
 // Make an API request to ADS
 function adsRequest(endpoint, method, token, body = null) {
@@ -26,9 +81,11 @@ function adsRequest(endpoint, method, token, body = null) {
 
       res.on('data', chunk => {
         data += chunk;
+        syncStats.bytesReceived += chunk.length;
       });
 
       res.on('end', () => {
+        syncStats.requestCount++;
         try {
           if (res.statusCode === 200) {
             resolve(JSON.parse(data));
@@ -51,7 +108,13 @@ function adsRequest(endpoint, method, token, body = null) {
   });
 }
 
-// Search for papers
+/**
+ * Search ADS for papers matching a query
+ * @param {string} token - ADS API token
+ * @param {string} query - ADS query string (e.g., 'bibcode:"2024ApJ..."', 'author:"Smith"')
+ * @param {SearchOptions} [options={}] - Search options
+ * @returns {Promise<{docs: ADSDocument[], numFound: number}>} Search results
+ */
 async function search(token, query, options = {}) {
   const fields = options.fields || 'bibcode,title,author,year,doi,abstract,keyword,pub,identifier,arxiv_class';
   const rows = options.rows || 25;
@@ -76,24 +139,49 @@ async function getByBibcode(token, bibcode) {
   return result.docs[0] || null;
 }
 
-// Get multiple papers by bibcodes in a single API call (batch lookup)
+/**
+ * Batch lookup multiple papers by bibcode
+ * Processes in batches of batchSize to avoid query length limits.
+ * Implements retry logic for 500/502/503 errors (up to 3 attempts with exponential backoff).
+ * @param {string} token - ADS API token
+ * @param {string[]} bibcodes - Array of bibcodes to look up
+ * @param {number} [batchSize=50] - Number of bibcodes per API request
+ * @returns {Promise<ADSDocument[]>} Found documents (may be fewer than input if some not found)
+ */
 async function getByBibcodes(token, bibcodes, batchSize = 50) {
   if (!bibcodes || bibcodes.length === 0) return [];
 
   const results = [];
 
+  // Clean bibcodes - trim whitespace and remove any stray characters
+  const cleanBibcodes = bibcodes.map(b => b.trim());
+
   // Process in batches to avoid query length limits
-  for (let i = 0; i < bibcodes.length; i += batchSize) {
-    const batch = bibcodes.slice(i, i + batchSize);
+  for (let i = 0; i < cleanBibcodes.length; i += batchSize) {
+    const batch = cleanBibcodes.slice(i, i + batchSize);
     const query = batch.map(b => `bibcode:"${b}"`).join(' OR ');
 
-    try {
-      const result = await search(token, query, { rows: batch.length });
-      if (result.docs) {
-        results.push(...result.docs);
+    console.log(`ADS query: ${query}`);
+
+    // Retry up to 3 times for server errors
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const result = await search(token, query, { rows: batch.length });
+        console.log(`ADS returned ${result.docs?.length || 0} results for ${batch.length} bibcodes`);
+        if (result.docs) {
+          results.push(...result.docs);
+        }
+        break; // Success, exit retry loop
+      } catch (e) {
+        const isServerError = e.message.includes('500') || e.message.includes('502') || e.message.includes('503');
+        if (isServerError && attempt < 2) {
+          console.log(`ADS server error, retrying in ${(attempt + 1) * 2}s...`);
+          await new Promise(r => setTimeout(r, (attempt + 1) * 2000));
+        } else {
+          console.error(`Batch lookup failed for batch ${i / batchSize}:`, e.message);
+          break;
+        }
       }
-    } catch (e) {
-      console.error(`Batch lookup failed for batch ${i / batchSize}:`, e.message);
     }
   }
 
@@ -180,7 +268,13 @@ async function exportBibtex(token, bibcodes) {
   });
 }
 
-// Get esources (PDF/article links) for a paper
+/**
+ * Get electronic source links (PDFs, HTML) for a paper
+ * Returns links to arXiv PDFs, publisher PDFs, and ADS scans.
+ * @param {string} token - ADS API token
+ * @param {string} bibcode - Paper bibcode
+ * @returns {Promise<EsourceRecord[]>} Array of source records with URLs and types
+ */
 async function getEsources(token, bibcode) {
   try {
     // Need to call the specific esource endpoint to get actual PDF links
@@ -273,7 +367,14 @@ function titleSimilarity(title1, title2) {
   return matches / union;
 }
 
-// Smart search that tries multiple strategies
+/**
+ * Smart search that tries multiple strategies to find a paper in ADS
+ * Attempts exact title match, title+author+year, author+year+keywords, etc.
+ * Uses title similarity scoring to validate matches.
+ * @param {string} token - ADS API token
+ * @param {SmartSearchMetadata} metadata - Known metadata to search with
+ * @returns {Promise<ADSDocument|null>} Best matching document or null if not found
+ */
 async function smartSearch(token, metadata) {
   const { title, firstAuthor, year, journal } = metadata;
 
@@ -420,5 +521,8 @@ module.exports = {
   exportBibtex,
   validateToken,
   adsToPaper,
-  extractArxivId
+  extractArxivId,
+  resetSyncStats,
+  getSyncStats,
+  formatBytes
 };

@@ -101,8 +101,7 @@ class SciXReader {
 
     // Console panel toggle
     document.getElementById('console-header')?.addEventListener('click', () => this.toggleConsole());
-    // Start with console collapsed
-    document.getElementById('console-panel')?.classList.add('collapsed');
+    // Console starts expanded by default
 
     // Console panel resize
     this.setupConsoleResize();
@@ -2363,19 +2362,33 @@ class SciXReader {
     const statusEl = document.getElementById('ads-lookup-status');
     const statusText = document.getElementById('ads-lookup-status-text');
     const resultsEl = document.getElementById('ads-lookup-results');
-    const applyBtn = document.getElementById('ads-lookup-apply-btn');
 
     // Reset state
     this.adsLookupSelectedDoc = null;
-    applyBtn.disabled = true;
     titleEl.textContent = this.selectedPaper.title || 'Untitled';
     resultsEl.innerHTML = '<div class="scix-empty-state"><p>Extracting metadata...</p></div>';
 
+    this.addConsoleMessage('Opening ADS lookup...', 'info');
+
     modal.classList.remove('hidden');
+
+    // Check if paper has DOI - use it directly
+    if (this.selectedPaper.doi) {
+      let doi = this.selectedPaper.doi;
+      doi = doi.replace(/^https?:\/\/doi\.org\//i, '');
+      doi = doi.replace(/^doi:/i, '');
+      queryInput.value = `doi:"${doi}"`;
+      statusEl.classList.remove('hidden');
+      statusText.textContent = 'Paper has DOI. Click Search to find in ADS.';
+      this.addConsoleMessage(`Using DOI for search: ${doi}`, 'info');
+      resultsEl.innerHTML = '<div class="scix-empty-state"><p>Click Search to find matching papers in ADS</p></div>';
+      return;
+    }
 
     // Extract metadata using LLM
     statusEl.classList.remove('hidden');
     statusText.textContent = 'Extracting metadata with AI...';
+    this.addConsoleMessage('Extracting metadata with AI...', 'info');
 
     try {
       const result = await window.electronAPI.llmExtractMetadata(this.selectedPaper.id);
@@ -2447,6 +2460,17 @@ class SciXReader {
       return;
     }
 
+    // If paper has DOI, use it directly (clean URL prefix if present)
+    if (paper.doi) {
+      let doi = paper.doi;
+      // Remove URL prefixes like https://doi.org/
+      doi = doi.replace(/^https?:\/\/doi\.org\//i, '');
+      doi = doi.replace(/^doi:/i, '');
+      queryInput.value = `doi:"${doi}"`;
+      this.addConsoleMessage(`Using DOI for search: ${doi}`, 'info');
+      return;
+    }
+
     let query = '';
     if (paper.authors?.[0]) {
       const firstAuthor = paper.authors[0].split(',')[0].trim();
@@ -2466,6 +2490,7 @@ class SciXReader {
     }
 
     queryInput.value = query.trim();
+    this.addConsoleMessage(`Built search query from paper metadata`, 'info');
   }
 
   hideAdsLookupModal() {

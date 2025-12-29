@@ -1000,6 +1000,9 @@ ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
 
   const libraryPath = store.get('libraryPath');
 
+  // Reset sync stats
+  adsApi.resetSyncStats();
+
   // Get papers to sync - either specified IDs or all papers
   let papersToSync;
   if (paperIds && paperIds.length > 0) {
@@ -1109,8 +1112,23 @@ ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
 
     // Batch fetch all metadata at once
     const adsResults = await adsApi.getByBibcodes(token, bibcodes);
-    const adsMap = new Map(adsResults.map(r => [r.bibcode, r]));
+    // Create map with both exact bibcode and normalized (no dots) for flexible matching
+    const adsMap = new Map();
+    const adsMapNormalized = new Map();
+    for (const r of adsResults) {
+      adsMap.set(r.bibcode, r);
+      adsMapNormalized.set(r.bibcode.replace(/\./g, ''), r);
+    }
     sendConsoleLog(`Fetched metadata for ${adsResults.length}/${bibcodes.length} papers`, 'success');
+
+    // Log any bibcodes that weren't found
+    if (adsResults.length < bibcodes.length) {
+      const foundBibcodes = new Set(adsResults.map(r => r.bibcode));
+      const missing = bibcodes.filter(b => !foundBibcodes.has(b) && !adsMapNormalized.has(b.replace(/\./g, '')));
+      if (missing.length > 0) {
+        sendConsoleLog(`Missing from ADS: ${missing.slice(0, 5).join(', ')}${missing.length > 5 ? '...' : ''}`, 'warn');
+      }
+    }
 
     // Batch fetch all BibTeX at once (much faster than individual calls)
     let bibtexMap = new Map();
@@ -1160,20 +1178,43 @@ ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
       const batchNum = Math.floor(i / CONCURRENCY) + 1;
       const totalBatches = Math.ceil(papersWithBibcode.length / CONCURRENCY);
 
-      sendConsoleLog(`Processing batch ${batchNum}/${totalBatches}...`, 'info');
+      const currentStats = adsApi.getSyncStats();
+      sendConsoleLog(`Batch ${batchNum}/${totalBatches} (${adsApi.formatBytes(currentStats.bytesReceived)} received)`, 'info');
 
       // Send progress update
       mainWindow.webContents.send('ads-sync-progress', {
         current: i + 1,
         total: papersToSync.length,
-        paper: `Processing batch ${batchNum}/${totalBatches}...`
+        paper: `Batch ${batchNum}/${totalBatches} (${adsApi.formatBytes(currentStats.bytesReceived)})`
       });
 
       const promises = batch.map(async (paper) => {
-        const adsData = adsMap.get(paper.bibcode);
+        // Try exact match first, then normalized (no dots)
+        let adsData = adsMap.get(paper.bibcode);
         if (!adsData) {
-          sendConsoleLog(`[${paper.bibcode}] Not found in ADS, skipping`, 'warn');
-          results.skipped++;
+          adsData = adsMapNormalized.get(paper.bibcode.replace(/\./g, ''));
+        }
+        // Also try looking up by DOI if we have it and bibcode failed
+        if (!adsData && paper.doi) {
+          try {
+            const cleanDoi = paper.doi.replace(/^https?:\/\/doi\.org\//i, '').replace(/^doi:/i, '');
+            sendConsoleLog(`[${paper.bibcode}] Trying DOI fallback: ${cleanDoi}`, 'info');
+            adsData = await adsApi.getByDOI(token, cleanDoi);
+            if (adsData) {
+              sendConsoleLog(`[${paper.bibcode}] Found via DOI: ${adsData.bibcode}`, 'success');
+            } else {
+              sendConsoleLog(`[${paper.bibcode}] DOI lookup returned no results`, 'warn');
+            }
+          } catch (e) {
+            sendConsoleLog(`[${paper.bibcode}] DOI lookup failed: ${e.message}`, 'warn');
+          }
+        } else if (!adsData) {
+          sendConsoleLog(`[${paper.bibcode}] No DOI available for fallback`, 'info');
+        }
+        if (!adsData) {
+          sendConsoleLog(`[${paper.bibcode}] Not found in ADS`, 'error');
+          results.failed++;
+          results.errors.push({ paper: paper.title, error: 'Not found in ADS' });
           return;
         }
 
@@ -1248,8 +1289,9 @@ ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
   // Update master.bib once at the end
   bibtex.updateMasterBib(libraryPath, database.getAllPapers());
 
-  // Send completion
-  sendConsoleLog(`Sync complete: ${results.updated} updated, ${results.skipped} skipped, ${results.failed} failed`,
+  // Send completion with data stats
+  const stats = adsApi.getSyncStats();
+  sendConsoleLog(`Sync complete: ${results.updated} updated, ${results.skipped} skipped, ${results.failed} failed (${adsApi.formatBytes(stats.bytesReceived)} received)`,
     results.failed > 0 ? 'warn' : 'success');
   mainWindow.webContents.send('ads-sync-progress', { done: true, results });
 

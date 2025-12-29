@@ -76,10 +76,13 @@ class SciXReader {
         await this.checkAdsToken();
         await this.checkLlmConnection();
 
-        // Restore last selected paper
+        // Restore last selected paper (with delay to ensure DOM is ready)
         const lastPaperId = await window.electronAPI.getLastSelectedPaper();
         if (lastPaperId && this.papers.find(p => p.id === lastPaperId)) {
-          this.selectPaper(lastPaperId);
+          // Use requestAnimationFrame to ensure paper list is rendered
+          requestAnimationFrame(() => {
+            this.selectPaper(lastPaperId);
+          });
         }
       } else {
         this.showSetupScreen();
@@ -100,6 +103,9 @@ class SciXReader {
     document.getElementById('console-header')?.addEventListener('click', () => this.toggleConsole());
     // Start with console collapsed
     document.getElementById('console-panel')?.classList.add('collapsed');
+
+    // Console panel resize
+    this.setupConsoleResize();
 
     // Listen for console messages from main process
     window.electronAPI.onConsoleLog((data) => {
@@ -822,7 +828,7 @@ class SciXReader {
           <span class="paper-item-authors">${this.formatAuthors(paper.authors, true)}</span>
           <span>${paper.year || ''}</span>
           ${this.getRatingEmoji(paper.rating)}
-          ${paper.bibcode ? `<button class="pdf-source-btn" data-paper-id="${paper.id}" data-bibcode="${paper.bibcode}" title="Choose PDF source">📄▾${paper.annotation_count > 0 ? `<span class="note-badge">${paper.annotation_count}</span>` : ''}</button>` : ''}
+          ${paper.bibcode ? `<button class="pdf-source-btn" data-paper-id="${paper.id}" data-bibcode="${paper.bibcode}" title="PDF">📄${paper.annotation_count > 0 ? `<span class="note-badge">${paper.annotation_count}</span>` : ''}</button>` : ''}
           ${paper.is_indexed ? '<span class="indexed-indicator" title="Indexed for AI search">⚡</span>' : ''}
         </div>
       </div>
@@ -2798,7 +2804,7 @@ class SciXReader {
       const result = await window.electronAPI.adsGetEsources(bibcode);
 
       if (!result.success) {
-        btn.textContent = '📄▾';
+        btn.textContent = '📄';
         alert(`Failed to get PDF sources: ${result.error}`);
         return;
       }
@@ -2808,24 +2814,27 @@ class SciXReader {
       // Fetch annotation counts by source for this paper
       const annotationCounts = await window.electronAPI.getAnnotationCountsBySource(paperId);
 
-      // Map dropdown types to database pdf_source values
-      const sourceToDbKey = { arxiv: 'EPRINT_PDF', ads: 'ADS_PDF', publisher: 'PUB_PDF' };
+      // Check which PDFs are already downloaded
+      const downloadedPdfs = await window.electronAPI.getDownloadedPdfSources(paperId);
 
-      btn.textContent = '📄▾';
+      btn.textContent = '📄';
 
-      // Collect available sources with annotation counts
+      // Collect available sources with annotation counts and download status
       const availableSources = [];
       if (sources.arxiv) {
         const count = annotationCounts['EPRINT_PDF'] || 0;
-        availableSources.push({ type: 'arxiv', label: '📑 arXiv PDF', noteCount: count });
-      }
-      if (sources.ads) {
-        const count = annotationCounts['ADS_PDF'] || 0;
-        availableSources.push({ type: 'ads', label: '📜 ADS Scan', noteCount: count });
+        const downloaded = downloadedPdfs.includes('EPRINT_PDF');
+        availableSources.push({ type: 'arxiv', label: '📑 arXiv', noteCount: count, downloaded });
       }
       if (sources.publisher) {
         const count = annotationCounts['PUB_PDF'] || 0;
-        availableSources.push({ type: 'publisher', label: '📰 Publisher', noteCount: count });
+        const downloaded = downloadedPdfs.includes('PUB_PDF');
+        availableSources.push({ type: 'publisher', label: '📰 Publisher', noteCount: count, downloaded });
+      }
+      if (sources.ads) {
+        const count = annotationCounts['ADS_PDF'] || 0;
+        const downloaded = downloadedPdfs.includes('ADS_PDF');
+        availableSources.push({ type: 'ads', label: '📜 ADS Scan', noteCount: count, downloaded });
       }
 
       // If no sources available
@@ -2834,7 +2843,7 @@ class SciXReader {
         return;
       }
 
-      // If only one source, download directly without showing menu
+      // If only one source, download/show it directly
       if (availableSources.length === 1) {
         await this.downloadFromSource(paperId, availableSources[0].type, null);
         return;
@@ -2847,7 +2856,8 @@ class SciXReader {
 
       dropdown.innerHTML = availableSources.map(s => {
         const notesBadge = s.noteCount > 0 ? `<span class="note-count-badge">${s.noteCount} 📝</span>` : '';
-        return `<div class="pdf-source-item" data-source="${s.type}">${s.label}${notesBadge}</div>`;
+        const downloadedIcon = s.downloaded ? '✓ ' : '';
+        return `<div class="pdf-source-item${s.downloaded ? ' downloaded' : ''}" data-source="${s.type}">${downloadedIcon}${s.label}${notesBadge}</div>`;
       }).join('');
 
       // Position dropdown below button
@@ -2876,7 +2886,7 @@ class SciXReader {
         });
       }, 0);
     } catch (error) {
-      btn.textContent = '📄▾';
+      btn.textContent = '📄';
       console.error('Error fetching PDF sources:', error);
     }
   }
@@ -2894,9 +2904,13 @@ class SciXReader {
 
   async downloadFromSource(paperId, sourceType, menuItem) {
     this.hidePdfSourceDropdown();
+    console.log(`[downloadFromSource] Starting download: paperId=${paperId}, sourceType=${sourceType}`);
 
     const paper = this.papers.find(p => p.id === paperId);
-    if (!paper) return;
+    if (!paper) {
+      console.log(`[downloadFromSource] Paper not found: ${paperId}`);
+      return;
+    }
 
     // Map source types to PDF source identifiers
     const sourceToType = {
@@ -2908,34 +2922,41 @@ class SciXReader {
 
     // If paper already has a PDF and it exists, just load it
     if (paper.pdf_path) {
+      console.log(`[downloadFromSource] Paper has pdf_path: ${paper.pdf_path}, checking if exists...`);
       const pdfExists = await window.electronAPI.getPdfPath(paper.pdf_path);
       if (pdfExists) {
-        console.log(`PDF already exists, loading: ${paper.pdf_path}`);
+        console.log(`[downloadFromSource] PDF already exists, loading: ${paper.pdf_path}`);
         if (this.selectedPaper && this.selectedPaper.id === paperId) {
           this.currentPdfSource = sourceToType[sourceType] || null;
           await this.loadPDF(this.selectedPaper);
         }
         return;
       }
+      console.log(`[downloadFromSource] PDF path exists but file doesn't, proceeding to download`);
     }
 
     // Publisher PDFs require authentication - open in auth window to download
     if (sourceType === 'publisher') {
+      console.log(`[downloadFromSource] Publisher download path for bibcode: ${paper.bibcode}`);
       // Get the direct publisher PDF URL from esources
       const esourcesResult = await window.electronAPI.adsGetEsources(paper.bibcode);
       let publisherUrl = null;
 
+      console.log(`[downloadFromSource] esourcesResult:`, esourcesResult);
+
       if (esourcesResult.success && esourcesResult.data.publisher) {
         publisherUrl = esourcesResult.data.publisher.url;
+        console.log(`[downloadFromSource] Got publisher URL from esources: ${publisherUrl}`);
       }
 
       // Fall back to ADS link gateway if no direct URL
       if (!publisherUrl) {
         publisherUrl = `https://ui.adsabs.harvard.edu/link_gateway/${paper.bibcode}/PUB_PDF`;
+        console.log(`[downloadFromSource] Using fallback ADS gateway URL: ${publisherUrl}`);
       }
 
       const proxyUrl = await window.electronAPI.getLibraryProxy();
-      console.log('Downloading publisher PDF:', { proxyUrl, publisherUrl, bibcode: paper.bibcode });
+      console.log('[downloadFromSource] Calling downloadPublisherPdf:', { proxyUrl, publisherUrl, bibcode: paper.bibcode });
 
       // Show loading indicator
       const paperItem = document.querySelector(`.paper-item[data-id="${paperId}"]`);
@@ -2963,14 +2984,14 @@ class SciXReader {
           if (btn) {
             btn.textContent = '✓';
             setTimeout(() => {
-              btn.textContent = '📄▾';
+              btn.textContent = '📄';
               btn.disabled = false;
             }, 1500);
           }
         } else {
           alert(`Download failed: ${result.error}`);
           if (btn) {
-            btn.textContent = '📄▾';
+            btn.textContent = '📄';
             btn.disabled = false;
           }
         }
@@ -2978,7 +2999,7 @@ class SciXReader {
         console.error('Publisher PDF download error:', error);
         alert(`Download error: ${error.message}`);
         if (btn) {
-          btn.textContent = '📄▾';
+          btn.textContent = '📄';
           btn.disabled = false;
         }
       }
@@ -3014,14 +3035,14 @@ class SciXReader {
         if (btn) {
           btn.textContent = '✓';
           setTimeout(() => {
-            btn.textContent = '📄▾';
+            btn.textContent = '📄';
             btn.disabled = false;
           }, 1500);
         }
       } else {
         alert(`Download failed: ${result.error}`);
         if (btn) {
-          btn.textContent = '📄▾';
+          btn.textContent = '📄';
           btn.disabled = false;
         }
       }
@@ -3029,7 +3050,7 @@ class SciXReader {
       console.error('Download error:', error);
       alert(`Download error: ${error.message}`);
       if (btn) {
-        btn.textContent = '📄▾';
+        btn.textContent = '📄';
         btn.disabled = false;
       }
     }
@@ -4644,9 +4665,50 @@ class SciXReader {
   }
 
   // Console panel methods
+  setupConsoleResize() {
+    const panel = document.getElementById('console-panel');
+    const handle = document.getElementById('console-resize-handle');
+    if (!panel || !handle) return;
+
+    let isResizing = false;
+    let startY = 0;
+    let startHeight = 0;
+
+    handle.addEventListener('mousedown', (e) => {
+      if (panel.classList.contains('collapsed')) return;
+      isResizing = true;
+      startY = e.clientY;
+      startHeight = panel.offsetHeight;
+      handle.classList.add('resizing');
+      document.body.style.cursor = 'ns-resize';
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!isResizing) return;
+      const delta = startY - e.clientY;
+      const newHeight = Math.min(400, Math.max(80, startHeight + delta));
+      panel.style.height = `${newHeight}px`;
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (isResizing) {
+        isResizing = false;
+        handle.classList.remove('resizing');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      }
+    });
+  }
+
   toggleConsole() {
     const panel = document.getElementById('console-panel');
     panel?.classList.toggle('collapsed');
+    // Reset height when expanding
+    if (!panel?.classList.contains('collapsed')) {
+      panel.style.height = '';
+    }
   }
 
   consoleLog(message, type = 'info') {

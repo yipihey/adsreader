@@ -413,12 +413,26 @@ body.resizing * {
   border-top: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  max-height: 200px;
-  transition: max-height 0.2s ease;
+  min-height: 28px;
+  max-height: 400px;
 }
 
 .console-panel.collapsed {
+  height: 28px !important;
+  min-height: 28px;
   max-height: 28px;
+}
+
+.console-resize-handle {
+  height: 4px;
+  background: transparent;
+  cursor: ns-resize;
+  position: relative;
+}
+
+.console-resize-handle:hover,
+.console-resize-handle.resizing {
+  background: var(--accent);
 }
 
 .console-header {
@@ -429,6 +443,7 @@ body.resizing * {
   cursor: pointer;
   background: var(--bg-secondary);
   user-select: none;
+  flex-shrink: 0;
 }
 
 .console-header:hover {
@@ -456,16 +471,19 @@ body.resizing * {
 .console-content {
   flex: 1;
   overflow: hidden;
-  transition: opacity 0.2s ease;
+  min-height: 0;
 }
 
 .console-panel.collapsed .console-content {
-  opacity: 0;
-  height: 0;
+  display: none;
+}
+
+.console-panel.collapsed .console-resize-handle {
+  display: none;
 }
 
 .console-log {
-  height: 150px;
+  height: 100%;
   overflow-y: auto;
   padding: 8px 10px;
   font-family: 'SF Mono', Monaco, 'Courier New', monospace;

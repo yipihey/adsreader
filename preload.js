@@ -99,6 +99,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Annotations
   getAnnotations: (paperId) => ipcRenderer.invoke('get-annotations', paperId),
   getAnnotationCountsBySource: (paperId) => ipcRenderer.invoke('get-annotation-counts-by-source', paperId),
+  getDownloadedPdfSources: (paperId) => ipcRenderer.invoke('get-downloaded-pdf-sources', paperId),
   createAnnotation: (paperId, data) => ipcRenderer.invoke('create-annotation', paperId, data),
   updateAnnotation: (id, data) => ipcRenderer.invoke('update-annotation', id, data),
   deleteAnnotation: (id) => ipcRenderer.invoke('delete-annotation', id),

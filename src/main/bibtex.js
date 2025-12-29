@@ -319,31 +319,55 @@ function cleanAuthorName(author) {
   return cleaned.trim();
 }
 
+// Extract bibcode from ADS URL
+function extractBibcodeFromAdsUrl(adsurl) {
+  if (!adsurl) return null;
+  // Match patterns like:
+  // http://adsabs.harvard.edu/abs/2011MNRAS.tmp.1739P
+  // https://ui.adsabs.harvard.edu/abs/2011MNRAS.tmp.1739P
+  // http://adsabs.harvard.edu/cgi-bin/nph-bib_query?bibcode=2011MNRAS.tmp.1739P
+  const absMatch = adsurl.match(/\/abs\/([^\/\s&?]+)/);
+  if (absMatch) return absMatch[1];
+
+  const bibcodeMatch = adsurl.match(/bibcode=([^&\s]+)/);
+  if (bibcodeMatch) return decodeURIComponent(bibcodeMatch[1]);
+
+  return null;
+}
+
 // Import papers from a BibTeX file
 function importBibtex(bibPath) {
   const content = fs.readFileSync(bibPath, 'utf-8');
   const entries = parseBibtex(content);
   const sourceFilename = path.basename(bibPath);
 
-  return entries.map(entry => ({
-    title: cleanBibtexValue(entry.title),
-    authors: entry.author ? entry.author.split(' and ').map(a => cleanAuthorName(a.trim())) : [],
-    year: entry.year ? parseInt(entry.year) : null,
-    journal: entry.journal || entry.booktitle,
-    doi: entry.doi,
-    arxiv_id: entry.eprint,
-    abstract: entry.abstract,
-    import_source: sourceFilename,
-    import_source_key: entry.key,
-    bibtex: paperToBibtex({
-      title: entry.title,
-      authors: entry.author ? entry.author.split(' and ').map(a => a.trim()) : [],
+  return entries.map(entry => {
+    // Try to extract bibcode from adsurl field
+    const bibcodeFromUrl = extractBibcodeFromAdsUrl(entry.adsurl);
+    // Use entry key as bibcode if it looks like one (e.g., 2011MNRAS.tmp.1739P)
+    const bibcodeFromKey = /^\d{4}[A-Za-z]/.test(entry.key) ? entry.key : null;
+
+    return {
+      title: cleanBibtexValue(entry.title),
+      authors: entry.author ? entry.author.split(' and ').map(a => cleanAuthorName(a.trim())) : [],
       year: entry.year ? parseInt(entry.year) : null,
-      journal: entry.journal || entry.booktitle,
+      journal: cleanBibtexValue(entry.journal || entry.booktitle),
       doi: entry.doi,
-      arxiv_id: entry.eprint
-    })
-  }));
+      arxiv_id: entry.eprint,
+      bibcode: bibcodeFromUrl || bibcodeFromKey,
+      abstract: cleanBibtexValue(entry.abstract),
+      import_source: sourceFilename,
+      import_source_key: entry.key,
+      bibtex: paperToBibtex({
+        title: entry.title,
+        authors: entry.author ? entry.author.split(' and ').map(a => a.trim()) : [],
+        year: entry.year ? parseInt(entry.year) : null,
+        journal: entry.journal || entry.booktitle,
+        doi: entry.doi,
+        arxiv_id: entry.eprint
+      })
+    };
+  });
 }
 
 module.exports = {

@@ -109,23 +109,84 @@ function escapeLatex(str) {
     .replace(/\^/g, '\\textasciicircum{}');
 }
 
+// Parse a BibTeX field value, handling nested braces
+function parseBibtexValue(str, startPos) {
+  let pos = startPos;
+
+  // Skip whitespace
+  while (pos < str.length && /\s/.test(str[pos])) pos++;
+
+  if (pos >= str.length) return { value: '', endPos: pos };
+
+  const startChar = str[pos];
+
+  // Braced value
+  if (startChar === '{') {
+    let depth = 1;
+    let value = '';
+    pos++;
+    while (pos < str.length && depth > 0) {
+      if (str[pos] === '{') depth++;
+      else if (str[pos] === '}') depth--;
+      if (depth > 0) value += str[pos];
+      pos++;
+    }
+    return { value: value.trim(), endPos: pos };
+  }
+
+  // Quoted value
+  if (startChar === '"') {
+    let value = '';
+    pos++;
+    while (pos < str.length && str[pos] !== '"') {
+      value += str[pos];
+      pos++;
+    }
+    pos++; // Skip closing quote
+    return { value: value.trim(), endPos: pos };
+  }
+
+  // Unquoted value (number or single word)
+  let value = '';
+  while (pos < str.length && /[^\s,}]/.test(str[pos])) {
+    value += str[pos];
+    pos++;
+  }
+  return { value: value.trim(), endPos: pos };
+}
+
 // Parse a BibTeX file
 function parseBibtex(content) {
   const entries = [];
-  const entryPattern = /@(\w+)\s*{\s*([^,]+),([^@]*)/g;
+  const entryPattern = /@(\w+)\s*{\s*([^,]+),/g;
 
   let match;
   while ((match = entryPattern.exec(content)) !== null) {
     const type = match[1].toLowerCase();
     const key = match[2].trim();
-    const fieldsStr = match[3];
 
+    // Find the end of this entry by counting braces
+    let pos = match.index + match[0].length;
+    let depth = 1;
+    let entryEnd = pos;
+    while (entryEnd < content.length && depth > 0) {
+      if (content[entryEnd] === '{') depth++;
+      else if (content[entryEnd] === '}') depth--;
+      entryEnd++;
+    }
+
+    const fieldsStr = content.substring(pos, entryEnd - 1);
     const fields = {};
-    const fieldPattern = /(\w+)\s*=\s*[{"]([^}"]*)[}"]/g;
 
+    // Parse fields with a simple state machine
+    const fieldPattern = /(\w[\w-]*)\s*=\s*/g;
     let fieldMatch;
     while ((fieldMatch = fieldPattern.exec(fieldsStr)) !== null) {
-      fields[fieldMatch[1].toLowerCase()] = fieldMatch[2];
+      const fieldName = fieldMatch[1].toLowerCase();
+      const { value } = parseBibtexValue(fieldsStr, fieldMatch.index + fieldMatch[0].length);
+      if (value) {
+        fields[fieldName] = value;
+      }
     }
 
     entries.push({
@@ -207,6 +268,57 @@ function getMultiCiteCommand(papers, style = 'cite') {
   }
 }
 
+// Clean up LaTeX escape sequences (handles both with and without backslash)
+function cleanLatexEscapes(str) {
+  if (!str) return str;
+  return str
+    // After \t is interpreted as tab: extasciitilde, extbackslash
+    .replace(/extasciitilde\s*\{\s*\}/g, ' ')      // extasciitilde{} -> space
+    .replace(/extasciitilde/g, ' ')                 // extasciitilde -> space
+    .replace(/extbackslash\s*\{\s*\}/g, '')        // extbackslash{} -> remove
+    .replace(/extbackslash/g, '')                   // extbackslash -> remove
+    // With full backslash preserved (raw BibTeX)
+    .replace(/\\textasciitilde\s*\{\s*\}/g, ' ')   // \textasciitilde{} -> space
+    .replace(/\\textasciitilde/g, ' ')              // \textasciitilde -> space
+    .replace(/\\textbackslash\s*\{\s*\}/g, '')     // \textbackslash{} -> remove
+    .replace(/\\textbackslash/g, '')                // \textbackslash -> remove
+    // Common LaTeX escapes
+    .replace(/\\&/g, '&')                          // \& -> &
+    .replace(/\\%/g, '%')                          // \% -> %
+    .replace(/\\\$/g, '$')                         // \$ -> $
+    .replace(/\\#/g, '#')                          // \# -> #
+    .replace(/\\_/g, '_')                          // \_ -> _
+    .replace(/\\ /g, ' ')                          // "\ " -> space
+    .replace(/~/g, ' ')                            // ~ -> space (non-breaking space)
+    .replace(/\t/g, ' ');                          // tab -> space
+}
+
+// Clean up BibTeX field value - remove outer braces and clean author names
+function cleanBibtexValue(str) {
+  if (!str) return str;
+  // First clean LaTeX escapes
+  let cleaned = cleanLatexEscapes(str);
+  // Remove outer braces if present
+  cleaned = cleaned.replace(/^\{(.+)\}$/, '$1');
+  // Remove remaining braces (used for capitalization protection)
+  cleaned = cleaned.replace(/\{|\}/g, '');
+  // Clean up multiple spaces
+  cleaned = cleaned.replace(/\s+/g, ' ');
+  return cleaned.trim();
+}
+
+// Clean author name - handle BibTeX author format
+function cleanAuthorName(author) {
+  if (!author) return author;
+  // First clean LaTeX escapes
+  let cleaned = cleanLatexEscapes(author);
+  // Remove braces
+  cleaned = cleaned.replace(/\{|\}/g, '');
+  // Clean up multiple spaces
+  cleaned = cleaned.replace(/\s+/g, ' ');
+  return cleaned.trim();
+}
+
 // Import papers from a BibTeX file
 function importBibtex(bibPath) {
   const content = fs.readFileSync(bibPath, 'utf-8');
@@ -214,8 +326,8 @@ function importBibtex(bibPath) {
   const sourceFilename = path.basename(bibPath);
 
   return entries.map(entry => ({
-    title: entry.title,
-    authors: entry.author ? entry.author.split(' and ').map(a => a.trim()) : [],
+    title: cleanBibtexValue(entry.title),
+    authors: entry.author ? entry.author.split(' and ').map(a => cleanAuthorName(a.trim())) : [],
     year: entry.year ? parseInt(entry.year) : null,
     journal: entry.journal || entry.booktitle,
     doi: entry.doi,

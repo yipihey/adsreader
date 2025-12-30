@@ -3567,11 +3567,38 @@ body.resizing-vertical * {
   pointer-events: auto;
   cursor: pointer;
   animation: anchor-drop 0.2s ease-out;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
 }
 
 .pdf-anchor-marker .anchor-icon {
   font-size: 20px;
   filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.3));
+}
+
+.pdf-anchor-marker .anchor-add-btn {
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  transition: background 0.15s, transform 0.1s;
+}
+
+.pdf-anchor-marker .anchor-add-btn:hover {
+  background: var(--accent-hover);
+  transform: scale(1.05);
+}
+
+.pdf-anchor-marker .anchor-add-btn:active {
+  transform: scale(0.98);
 }
 
 @keyframes anchor-drop {

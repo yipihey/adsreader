@@ -1039,7 +1039,6 @@ class ADSReader {
     pdfContainer?.addEventListener('mouseup', (e) => this.handlePdfMouseUp(e));
     document.getElementById('ctx-explain-text')?.addEventListener('click', () => this.explainSelectedText());
     document.getElementById('ctx-copy-text')?.addEventListener('click', () => this.copySelectedText());
-    document.getElementById('ctx-add-anchor-note')?.addEventListener('click', () => this.createNoteAtAnchor());
     document.getElementById('ai-explanation-close')?.addEventListener('click', () => this.hideExplanationPopup());
 
     // Semantic search
@@ -5082,57 +5081,49 @@ class ADSReader {
       screenY: e.clientY
     };
 
-    // Show visual anchor marker
+    // Show visual anchor marker with Add Note button
     this.showAnchorMarker(pageWrapper, relX, relY);
-
-    // Show anchor context menu
-    this.showAnchorContextMenu(e.clientX, e.clientY);
   }
 
   showAnchorMarker(pageWrapper, relX, relY) {
     // Remove any existing anchor marker
     this.removeAnchorMarker();
 
-    // Create anchor marker element
+    // Create anchor marker element with Add Note button
     const marker = document.createElement('div');
     marker.className = 'pdf-anchor-marker';
     marker.style.left = `${relX * 100}%`;
     marker.style.top = `${relY * 100}%`;
-    marker.innerHTML = '<span class="anchor-icon">📍</span>';
 
+    const icon = document.createElement('span');
+    icon.className = 'anchor-icon';
+    icon.textContent = '📍';
+
+    const addBtn = document.createElement('button');
+    addBtn.className = 'anchor-add-btn';
+    addBtn.textContent = '+ Note';
+    addBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.createNoteAtAnchor();
+    });
+
+    marker.appendChild(icon);
+    marker.appendChild(addBtn);
     pageWrapper.appendChild(marker);
+
+    // Auto-hide on click elsewhere (but not on the marker itself)
+    const hideHandler = (e) => {
+      if (!marker.contains(e.target)) {
+        this.removeAnchorMarker();
+        document.removeEventListener('mousedown', hideHandler);
+      }
+    };
+    setTimeout(() => document.addEventListener('mousedown', hideHandler), 0);
   }
 
   removeAnchorMarker() {
     document.querySelectorAll('.pdf-anchor-marker').forEach(m => m.remove());
     this.pdfAnchorPosition = null;
-  }
-
-  showAnchorContextMenu(x, y) {
-    // Hide text context menu if visible
-    this.hideTextContextMenu();
-
-    const menu = document.getElementById('anchor-context-menu');
-    if (!menu) return;
-
-    menu.style.left = `${x}px`;
-    menu.style.top = `${y}px`;
-    menu.classList.remove('hidden');
-
-    // Auto-hide on click elsewhere
-    const hideHandler = (e) => {
-      if (!menu.contains(e.target) && !e.target.closest('.pdf-anchor-marker')) {
-        menu.classList.add('hidden');
-        this.removeAnchorMarker();
-        document.removeEventListener('click', hideHandler);
-      }
-    };
-    setTimeout(() => document.addEventListener('click', hideHandler), 0);
-  }
-
-  hideAnchorContextMenu() {
-    const menu = document.getElementById('anchor-context-menu');
-    if (menu) menu.classList.add('hidden');
   }
 
   async createNoteAtAnchor() {

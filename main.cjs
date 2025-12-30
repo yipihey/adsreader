@@ -1734,6 +1734,34 @@ ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
     errors: []
   };
 
+  // Helper to merge ADS metadata with existing paper data
+  // Only updates fields where ADS has data; preserves existing values when ADS is empty
+  const mergeMetadata = (existing, adsMetadata) => {
+    const merged = {};
+    const allKeys = new Set([...Object.keys(existing), ...Object.keys(adsMetadata)]);
+
+    for (const key of allKeys) {
+      const adsValue = adsMetadata[key];
+      const existingValue = existing[key];
+
+      // Check if ADS has a meaningful value
+      const adsHasValue = adsValue !== null && adsValue !== undefined &&
+        adsValue !== '' &&
+        !(Array.isArray(adsValue) && adsValue.length === 0);
+
+      if (adsHasValue) {
+        // ADS has data - use it
+        merged[key] = adsValue;
+      } else if (existingValue !== undefined) {
+        // ADS doesn't have data but paper does - keep existing
+        merged[key] = existingValue;
+      }
+      // If neither has data, don't include the key
+    }
+
+    return merged;
+  };
+
   // Helper to process a single paper (for parallel execution)
   const processPaper = async (paper, adsData, bibtexMap = null) => {
     const bibcode = adsData.bibcode;
@@ -1741,14 +1769,17 @@ ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
 
     try {
       sendConsoleLog(`[${bibcode}] Updating metadata...`, 'info');
-      const metadata = adsApi.adsToPaper(adsData);
+      const adsMetadata = adsApi.adsToPaper(adsData);
+
+      // Merge ADS metadata with existing paper data (preserves existing values when ADS is empty)
+      const mergedMetadata = mergeMetadata(paper, adsMetadata);
 
       // Get BibTeX from pre-fetched map or existing
       let bibtexStr = bibtexMap?.get(adsData.bibcode) || paper.bibtex;
 
       // Update paper metadata (don't save yet - batch save at end)
       database.updatePaper(paper.id, {
-        ...metadata,
+        ...mergedMetadata,
         bibtex: bibtexStr
       }, false);
 

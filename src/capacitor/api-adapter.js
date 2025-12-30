@@ -14,17 +14,29 @@ import { CapacitorHttp } from '@capacitor/core';
 // Import SQLite database module
 import * as MobileDB from './mobile-database.js';
 
+// Import shared utilities
+import {
+  adsToPaper,
+  extractArxivId,
+  safeJsonParse,
+  generatePdfFilename,
+  sanitizeBibcodeForFilename
+} from '../shared/paper-utils.js';
+import {
+  ADS_API_BASE,
+  ADS_SEARCH_FIELDS,
+  LIBRARY_FOLDER_NAME,
+  DEFAULT_PDF_PRIORITY
+} from '../shared/constants.js';
+
 // Cloud LLM service instance
 let cloudLlmService = null;
 
 // Database initialized flag
 let dbInitialized = false;
 
-// Library folder name in Documents
-const LIBRARY_FOLDER = 'ADSReader';
-
-// ADS API base URL
-const ADS_API_BASE = 'https://api.adsabs.harvard.edu/v1';
+// Library folder name in Documents (use constant or fallback)
+const LIBRARY_FOLDER = LIBRARY_FOLDER_NAME || 'ADSReader';
 
 // Legacy JSON file for migration
 const LEGACY_PAPERS_FILE = 'papers.json';
@@ -115,20 +127,7 @@ async function migrateLegacyData() {
   }
 }
 
-// Helper function to extract arXiv ID from ADS identifiers
-function extractArxivId(identifiers) {
-  if (!identifiers) return null;
-  for (const id of identifiers) {
-    if (id.startsWith('arXiv:')) {
-      return id.replace('arXiv:', '');
-    }
-    const match = id.match(/^(\d{4}\.\d{4,5})(v\d+)?$/);
-    if (match) {
-      return match[1];
-    }
-  }
-  return null;
-}
+// extractArxivId imported from shared/paper-utils.js
 
 // Helper to download PDF for a paper (standalone function)
 async function downloadPaperPdf(paper, token, pdfPriority) {
@@ -208,21 +207,7 @@ async function downloadPaperPdf(paper, token, pdfPriority) {
   }
 }
 
-// Convert ADS response document to our paper format
-function adsToPaper(adsDoc) {
-  return {
-    bibcode: adsDoc.bibcode,
-    doi: adsDoc.doi?.[0] || null,
-    arxiv_id: extractArxivId(adsDoc.identifier),
-    title: adsDoc.title?.[0] || 'Untitled',
-    authors: adsDoc.author || [],
-    year: adsDoc.year ? parseInt(adsDoc.year) : null,
-    journal: adsDoc.pub || null,
-    abstract: adsDoc.abstract || null,
-    keywords: adsDoc.keyword || [],
-    citation_count: adsDoc.citation_count || 0
-  };
-}
+// adsToPaper imported from shared/paper-utils.js
 
 // Event emitter for iOS (simple implementation)
 const eventListeners = {

@@ -8,6 +8,7 @@
 
 import initSqlJs from 'sql.js';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
+import { applySchema } from '../shared/database-schema.js';
 
 let db = null;
 let dbPath = null;
@@ -102,149 +103,10 @@ export function closeDatabase() {
 }
 
 /**
- * Create database schema
+ * Create database schema using shared definition
  */
 function createSchema() {
-  db.run(`
-    CREATE TABLE IF NOT EXISTS papers (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      bibcode TEXT UNIQUE,
-      doi TEXT,
-      arxiv_id TEXT,
-      title TEXT,
-      authors TEXT,
-      year INTEGER,
-      journal TEXT,
-      abstract TEXT,
-      keywords TEXT,
-      pdf_path TEXT,
-      text_path TEXT,
-      bibtex TEXT,
-      read_status TEXT DEFAULT 'unread',
-      rating INTEGER DEFAULT 0,
-      added_date TEXT,
-      modified_date TEXT,
-      import_source TEXT,
-      import_source_key TEXT,
-      citation_count INTEGER DEFAULT 0
-    )
-  `);
-
-  // Migration: Add columns if they don't exist
-  const migrations = [
-    'ALTER TABLE papers ADD COLUMN rating INTEGER DEFAULT 0',
-    'ALTER TABLE papers ADD COLUMN import_source TEXT',
-    'ALTER TABLE papers ADD COLUMN import_source_key TEXT',
-    'ALTER TABLE papers ADD COLUMN citation_count INTEGER DEFAULT 0'
-  ];
-
-  for (const sql of migrations) {
-    try { db.run(sql); } catch (e) { /* Column exists */ }
-  }
-
-  db.run(`
-    CREATE TABLE IF NOT EXISTS refs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      paper_id INTEGER,
-      ref_bibcode TEXT,
-      ref_title TEXT,
-      ref_authors TEXT,
-      ref_year INTEGER,
-      FOREIGN KEY (paper_id) REFERENCES papers(id)
-    )
-  `);
-
-  db.run(`
-    CREATE TABLE IF NOT EXISTS citations (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      paper_id INTEGER,
-      citing_bibcode TEXT,
-      citing_title TEXT,
-      citing_authors TEXT,
-      citing_year INTEGER,
-      FOREIGN KEY (paper_id) REFERENCES papers(id)
-    )
-  `);
-
-  db.run(`
-    CREATE TABLE IF NOT EXISTS collections (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      parent_id INTEGER,
-      is_smart INTEGER DEFAULT 0,
-      query TEXT,
-      created_date TEXT,
-      FOREIGN KEY (parent_id) REFERENCES collections(id)
-    )
-  `);
-
-  db.run(`
-    CREATE TABLE IF NOT EXISTS paper_collections (
-      paper_id INTEGER,
-      collection_id INTEGER,
-      PRIMARY KEY (paper_id, collection_id),
-      FOREIGN KEY (paper_id) REFERENCES papers(id),
-      FOREIGN KEY (collection_id) REFERENCES collections(id)
-    )
-  `);
-
-  db.run(`
-    CREATE TABLE IF NOT EXISTS annotations (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      paper_id INTEGER,
-      page_number INTEGER,
-      selection_text TEXT,
-      selection_rects TEXT,
-      note_content TEXT,
-      color TEXT DEFAULT '#ffeb3b',
-      pdf_source TEXT,
-      created_at TEXT,
-      updated_at TEXT,
-      FOREIGN KEY (paper_id) REFERENCES papers(id)
-    )
-  `);
-
-  db.run(`
-    CREATE TABLE IF NOT EXISTS paper_summaries (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      paper_id INTEGER UNIQUE,
-      summary_text TEXT,
-      model_used TEXT,
-      created_at TEXT,
-      FOREIGN KEY (paper_id) REFERENCES papers(id)
-    )
-  `);
-
-  db.run(`
-    CREATE TABLE IF NOT EXISTS paper_qa (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      paper_id INTEGER,
-      question TEXT,
-      answer TEXT,
-      created_at TEXT,
-      FOREIGN KEY (paper_id) REFERENCES papers(id)
-    )
-  `);
-
-  db.run(`
-    CREATE TABLE IF NOT EXISTS text_embeddings (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      paper_id INTEGER,
-      chunk_index INTEGER,
-      chunk_text TEXT,
-      embedding TEXT,
-      FOREIGN KEY (paper_id) REFERENCES papers(id)
-    )
-  `);
-
-  // Create indexes
-  try {
-    db.run(`CREATE INDEX IF NOT EXISTS idx_papers_bibcode ON papers(bibcode)`);
-    db.run(`CREATE INDEX IF NOT EXISTS idx_papers_added_date ON papers(added_date)`);
-    db.run(`CREATE INDEX IF NOT EXISTS idx_refs_paper_id ON refs(paper_id)`);
-    db.run(`CREATE INDEX IF NOT EXISTS idx_citations_paper_id ON citations(paper_id)`);
-    db.run(`CREATE INDEX IF NOT EXISTS idx_annotations_paper_id ON annotations(paper_id)`);
-  } catch (e) { /* Indexes exist */ }
+  applySchema(db);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

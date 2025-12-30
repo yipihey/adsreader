@@ -2,6 +2,12 @@
 // Integration with NASA ADS (Astrophysics Data System) API
 
 const https = require('https');
+const {
+  formatBytes,
+  extractArxivId,
+  adsToPaper,
+  titleSimilarity
+} = require('../shared/paper-utils.cjs');
 
 const ADS_HOST = 'api.adsabs.harvard.edu';
 const ADS_BASE_PATH = '/v1';
@@ -54,11 +60,7 @@ function getSyncStats() {
   return { ...syncStats };
 }
 
-function formatBytes(bytes) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
-}
+// formatBytes imported from shared/paper-utils.cjs
 
 // Make an API request to ADS
 function adsRequest(endpoint, method, token, body = null) {
@@ -310,62 +312,7 @@ async function validateToken(token) {
   }
 }
 
-// Convert ADS response to our paper format
-function adsToPaper(adsDoc) {
-  return {
-    bibcode: adsDoc.bibcode,
-    doi: adsDoc.doi?.[0] || null,
-    arxiv_id: extractArxivId(adsDoc.identifier),
-    title: adsDoc.title?.[0] || 'Untitled',
-    authors: adsDoc.author || [],
-    year: adsDoc.year ? parseInt(adsDoc.year) : null,
-    journal: adsDoc.pub || null,
-    abstract: adsDoc.abstract || null,
-    keywords: adsDoc.keyword || []
-  };
-}
-
-// Extract arXiv ID from ADS identifiers
-function extractArxivId(identifiers) {
-  if (!identifiers) return null;
-
-  for (const id of identifiers) {
-    if (id.startsWith('arXiv:')) {
-      return id.replace('arXiv:', '');
-    }
-    // Match pattern like 2401.12345
-    const match = id.match(/^(\d{4}\.\d{4,5})(v\d+)?$/);
-    if (match) {
-      return match[1];
-    }
-  }
-  return null;
-}
-
-// Calculate similarity between two titles
-function titleSimilarity(title1, title2) {
-  if (!title1 || !title2) return 0;
-
-  const normalize = (s) => s.toLowerCase()
-    .replace(/[^\w\s]/g, ' ')
-    .split(/\s+/)
-    .filter(w => w.length > 2)
-    .filter(w => !['the', 'and', 'for', 'with', 'from', 'that', 'this', 'have', 'been', 'were', 'their', 'which', 'through', 'about', 'into', 'using', 'based'].includes(w));
-
-  const words1 = new Set(normalize(title1));
-  const words2 = new Set(normalize(title2));
-
-  if (words1.size === 0 || words2.size === 0) return 0;
-
-  let matches = 0;
-  for (const w of words1) {
-    if (words2.has(w)) matches++;
-  }
-
-  // Jaccard-like similarity
-  const union = new Set([...words1, ...words2]).size;
-  return matches / union;
-}
+// adsToPaper, extractArxivId, titleSimilarity imported from shared/paper-utils.cjs
 
 /**
  * Smart search that tries multiple strategies to find a paper in ADS

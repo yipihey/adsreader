@@ -1034,10 +1034,13 @@ class ADSReader {
     // LLM stream listener
     window.electronAPI.onLlmStream((data) => this.handleLlmStream(data));
 
-    // Text selection for AI explain
-    document.getElementById('pdf-container')?.addEventListener('mouseup', (e) => this.handleTextSelection(e));
+    // Text selection and anchor placement for AI explain and notes
+    const pdfContainer = document.getElementById('pdf-container');
+    pdfContainer?.addEventListener('mousedown', (e) => this.handlePdfMouseDown(e));
+    pdfContainer?.addEventListener('mouseup', (e) => this.handlePdfMouseUp(e));
     document.getElementById('ctx-explain-text')?.addEventListener('click', () => this.explainSelectedText());
     document.getElementById('ctx-copy-text')?.addEventListener('click', () => this.copySelectedText());
+    document.getElementById('ctx-add-anchor-note')?.addEventListener('click', () => this.createNoteAtAnchor());
     document.getElementById('ai-explanation-close')?.addEventListener('click', () => this.hideExplanationPopup());
 
     // Semantic search
@@ -5025,18 +5028,151 @@ class ADSReader {
   explainStreamText = '';  // Accumulate explanation text for markdown rendering
   qaStreamText = '';  // Accumulate Q&A answer text for markdown rendering
 
-  handleTextSelection(e) {
+  // Track mousedown for detecting clicks vs selections
+  pdfMouseDownPos = null;
+  pdfAnchorPosition = null;
+
+  handlePdfMouseDown(e) {
+    // Store mousedown position to detect click vs drag
+    this.pdfMouseDownPos = { x: e.clientX, y: e.clientY };
+  }
+
+  handlePdfMouseUp(e) {
     const selection = window.getSelection();
     const text = selection.toString().trim();
 
+    // Check if this was a click (minimal movement) vs a selection drag
+    const isClick = this.pdfMouseDownPos &&
+      Math.abs(e.clientX - this.pdfMouseDownPos.x) < 5 &&
+      Math.abs(e.clientY - this.pdfMouseDownPos.y) < 5;
+
     if (text.length > 10) {
+      // Text selection - show selection context menu
       this.selectedText = text;
       this.selectedTextPosition = { x: e.clientX, y: e.clientY };
-      // Store selection info for annotations before showing menu (selection may be cleared on click)
       this.selectedTextPage = this.getPageFromSelection();
       this.selectedTextRects = this.getSelectionRects(this.selectedTextPage);
       this.showTextContextMenu(e.clientX, e.clientY);
+      this.removeAnchorMarker();
+    } else if (isClick && !e.target.closest('.pdf-highlight') && !e.target.closest('.pdf-anchor-marker')) {
+      // Click without selection - place anchor for notes
+      this.placeAnchorAtClick(e);
     }
+
+    this.pdfMouseDownPos = null;
+  }
+
+  placeAnchorAtClick(e) {
+    // Find which page was clicked
+    const pageWrapper = e.target.closest('.pdf-page-wrapper');
+    if (!pageWrapper) return;
+
+    const pageNum = parseInt(pageWrapper.dataset.page);
+    const rect = pageWrapper.getBoundingClientRect();
+
+    // Calculate relative position within the page (0-1 range)
+    const relX = (e.clientX - rect.left) / rect.width;
+    const relY = (e.clientY - rect.top) / rect.height;
+
+    // Store anchor position
+    this.pdfAnchorPosition = {
+      page: pageNum,
+      x: relX,
+      y: relY,
+      screenX: e.clientX,
+      screenY: e.clientY
+    };
+
+    // Show visual anchor marker
+    this.showAnchorMarker(pageWrapper, relX, relY);
+
+    // Show anchor context menu
+    this.showAnchorContextMenu(e.clientX, e.clientY);
+  }
+
+  showAnchorMarker(pageWrapper, relX, relY) {
+    // Remove any existing anchor marker
+    this.removeAnchorMarker();
+
+    // Create anchor marker element
+    const marker = document.createElement('div');
+    marker.className = 'pdf-anchor-marker';
+    marker.style.left = `${relX * 100}%`;
+    marker.style.top = `${relY * 100}%`;
+    marker.innerHTML = '<span class="anchor-icon">📍</span>';
+
+    pageWrapper.appendChild(marker);
+  }
+
+  removeAnchorMarker() {
+    document.querySelectorAll('.pdf-anchor-marker').forEach(m => m.remove());
+    this.pdfAnchorPosition = null;
+  }
+
+  showAnchorContextMenu(x, y) {
+    // Hide text context menu if visible
+    this.hideTextContextMenu();
+
+    const menu = document.getElementById('anchor-context-menu');
+    if (!menu) return;
+
+    menu.style.left = `${x}px`;
+    menu.style.top = `${y}px`;
+    menu.classList.remove('hidden');
+
+    // Auto-hide on click elsewhere
+    const hideHandler = (e) => {
+      if (!menu.contains(e.target) && !e.target.closest('.pdf-anchor-marker')) {
+        menu.classList.add('hidden');
+        this.removeAnchorMarker();
+        document.removeEventListener('click', hideHandler);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', hideHandler), 0);
+  }
+
+  hideAnchorContextMenu() {
+    const menu = document.getElementById('anchor-context-menu');
+    if (menu) menu.classList.add('hidden');
+  }
+
+  async createNoteAtAnchor() {
+    if (!this.selectedPaper || !this.pdfAnchorPosition) return;
+
+    this.hideAnchorContextMenu();
+
+    const { page, x, y } = this.pdfAnchorPosition;
+
+    try {
+      const result = await window.electronAPI.createAnnotation(this.selectedPaper.id, {
+        page_number: page,
+        selection_text: null,
+        selection_rects: [{ x, y, width: 0, height: 0, isAnchor: true }],
+        note_content: '',
+        color: '#ffeb3b',
+        pdf_source: this.currentPdfSource
+      });
+
+      if (result.success) {
+        await this.loadAnnotations(this.selectedPaper.id);
+        this.renderHighlightsOnPdf();
+
+        // Switch to Notes tab and start editing
+        this.switchTab('notes');
+        requestAnimationFrame(() => {
+          this.editAnnotation(result.annotation.id);
+        });
+      }
+    } catch (error) {
+      console.error('Error creating anchor note:', error);
+    }
+
+    this.removeAnchorMarker();
+  }
+
+  // Keep old method name for backward compatibility
+  handleTextSelection(e) {
+    this.handlePdfMouseUp(e);
   }
 
   showTextContextMenu(x, y) {
@@ -5599,25 +5735,25 @@ class ADSReader {
       pageWrapper.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
 
-    // Highlight the PDF highlight element
-    document.querySelectorAll('.pdf-highlight').forEach(el => el.classList.remove('active'));
-    document.querySelectorAll(`.pdf-highlight[data-annotation="${id}"]`).forEach(el => el.classList.add('active'));
+    // Highlight the PDF highlight element or anchor note
+    document.querySelectorAll('.pdf-highlight, .pdf-anchor-note').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll(`.pdf-highlight[data-annotation="${id}"], .pdf-anchor-note[data-annotation="${id}"]`).forEach(el => el.classList.add('active'));
   }
 
   renderHighlightsOnPdf() {
-    // Remove existing highlights
+    // Remove existing highlights and anchor notes
     document.querySelectorAll('.pdf-highlight-layer').forEach(el => el.remove());
+    document.querySelectorAll('.pdf-anchor-note').forEach(el => el.remove());
 
     // Group annotations by page
     const byPage = {};
     this.annotations.forEach(a => {
-      if (!a.selection_rects?.length) return;
       const page = a.page_number || 1;
       if (!byPage[page]) byPage[page] = [];
       byPage[page].push(a);
     });
 
-    // Add highlights to each page
+    // Add highlights and anchor notes to each page
     Object.keys(byPage).forEach(pageNum => {
       const pageWrapper = document.querySelector(`.pdf-page-wrapper[data-page="${pageNum}"]`);
       if (!pageWrapper) return;
@@ -5628,21 +5764,45 @@ class ADSReader {
       byPage[pageNum].forEach(annotation => {
         const colorClass = this.getColorClass(annotation.color);
 
-        annotation.selection_rects.forEach(rect => {
-          const highlight = document.createElement('div');
-          highlight.className = `pdf-highlight ${colorClass}`;
-          highlight.dataset.annotation = annotation.id;
-          highlight.style.left = `${rect.x * 100}%`;
-          highlight.style.top = `${rect.y * 100}%`;
-          highlight.style.width = `${rect.width * 100}%`;
-          highlight.style.height = `${rect.height * 100}%`;
+        // Check if this is an anchor note (no selection text, single rect with isAnchor or zero dimensions)
+        const isAnchorNote = !annotation.selection_text &&
+          annotation.selection_rects?.length === 1 &&
+          (annotation.selection_rects[0].isAnchor ||
+           (annotation.selection_rects[0].width === 0 && annotation.selection_rects[0].height === 0));
 
-          highlight.addEventListener('click', () => {
+        if (isAnchorNote && annotation.selection_rects?.length) {
+          // Render as anchor marker (circular dot)
+          const rect = annotation.selection_rects[0];
+          const anchor = document.createElement('div');
+          anchor.className = 'pdf-anchor-note';
+          anchor.dataset.annotation = annotation.id;
+          anchor.style.left = `${rect.x * 100}%`;
+          anchor.style.top = `${rect.y * 100}%`;
+          anchor.title = annotation.note_content?.substring(0, 50) || 'Note';
+
+          anchor.addEventListener('click', () => {
             this.scrollToAnnotationInSidebar(annotation.id);
           });
 
-          layer.appendChild(highlight);
-        });
+          pageWrapper.appendChild(anchor);
+        } else if (annotation.selection_rects?.length) {
+          // Render as highlight rectangles
+          annotation.selection_rects.forEach(rect => {
+            const highlight = document.createElement('div');
+            highlight.className = `pdf-highlight ${colorClass}`;
+            highlight.dataset.annotation = annotation.id;
+            highlight.style.left = `${rect.x * 100}%`;
+            highlight.style.top = `${rect.y * 100}%`;
+            highlight.style.width = `${rect.width * 100}%`;
+            highlight.style.height = `${rect.height * 100}%`;
+
+            highlight.addEventListener('click', () => {
+              this.scrollToAnnotationInSidebar(annotation.id);
+            });
+
+            layer.appendChild(highlight);
+          });
+        }
       });
 
       pageWrapper.appendChild(layer);

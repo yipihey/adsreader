@@ -3559,6 +3559,58 @@ body.resizing-vertical * {
 .pdf-highlight.orange { background: rgba(251, 146, 60, 0.35); }
 .pdf-highlight.orange:hover { background: rgba(251, 146, 60, 0.55); }
 
+/* PDF anchor marker for note placement */
+.pdf-anchor-marker {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  z-index: 10;
+  pointer-events: auto;
+  cursor: pointer;
+  animation: anchor-drop 0.2s ease-out;
+}
+
+.pdf-anchor-marker .anchor-icon {
+  font-size: 20px;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.3));
+}
+
+@keyframes anchor-drop {
+  from {
+    transform: translate(-50%, -150%);
+    opacity: 0;
+  }
+  to {
+    transform: translate(-50%, -100%);
+    opacity: 1;
+  }
+}
+
+/* Saved anchor note marker (smaller, persistent) */
+.pdf-anchor-note {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  background: var(--accent);
+  border: 2px solid white;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 5;
+  pointer-events: auto;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.pdf-anchor-note:hover {
+  transform: translate(-50%, -50%) scale(1.3);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+}
+
+.pdf-anchor-note.active {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.3);
+}
+
 /* PDF page wrapper for highlights */
 .pdf-page-wrapper {
   position: relative;

@@ -1990,18 +1990,25 @@ ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
       // Fallback to smart search if DOI/arXiv lookup failed
       if (!adsData && paper.title) {
         let firstAuthor = null;
-        if (paper.authors && paper.authors.length > 0) {
-          const authorStr = paper.authors[0];
-          if (authorStr.includes(',')) {
-            firstAuthor = authorStr.split(',')[0].trim();
-          } else {
-            const parts = authorStr.trim().split(/\s+/);
-            if (parts.length > 0) {
-              firstAuthor = parts[parts.length - 1];
+        if (paper.authors) {
+          // Handle both string and array formats
+          let authorStr = Array.isArray(paper.authors) ? paper.authors[0] : paper.authors;
+          if (authorStr) {
+            // If multiple authors separated by ' and ' or ';', take the first
+            authorStr = authorStr.split(/ and |;/)[0].trim();
+            if (authorStr.includes(',')) {
+              // "Last, First" format
+              firstAuthor = authorStr.split(',')[0].trim();
+            } else {
+              // "First Last" format - take last word as surname
+              const parts = authorStr.trim().split(/\s+/);
+              if (parts.length > 0) {
+                firstAuthor = parts[parts.length - 1];
+              }
             }
           }
         }
-        sendConsoleLog(`Trying smart search for "${paper.title?.substring(0, 30)}..."`, 'info');
+        sendConsoleLog(`Trying smart search for "${paper.title?.substring(0, 30)}..." (author: ${firstAuthor || 'none'})`, 'info');
         adsData = await adsApi.smartSearch(token, {
           title: paper.title,
           firstAuthor: firstAuthor,
@@ -2185,14 +2192,19 @@ ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
         // Strategy 4: Fall back to basic smart search using paper metadata
         if (!adsData && paper.title) {
           let firstAuthor = null;
-          if (paper.authors && paper.authors.length > 0) {
-            const authorStr = paper.authors[0];
-            if (authorStr.includes(',')) {
-              firstAuthor = authorStr.split(',')[0].trim();
-            } else {
-              const parts = authorStr.trim().split(/\s+/);
-              if (parts.length > 0) {
-                firstAuthor = parts[parts.length - 1];
+          if (paper.authors) {
+            // Handle both string and array formats
+            let authorStr = Array.isArray(paper.authors) ? paper.authors[0] : paper.authors;
+            if (authorStr) {
+              // If multiple authors separated by ' and ' or ';', take the first
+              authorStr = authorStr.split(/ and |;/)[0].trim();
+              if (authorStr.includes(',')) {
+                firstAuthor = authorStr.split(',')[0].trim();
+              } else {
+                const parts = authorStr.trim().split(/\s+/);
+                if (parts.length > 0) {
+                  firstAuthor = parts[parts.length - 1];
+                }
               }
             }
           }

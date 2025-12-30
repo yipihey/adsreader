@@ -1,4 +1,4 @@
-# SciX Reader - TODO & Known Issues
+# ADS Reader - TODO & Known Issues
 
 ## Known Issues
 

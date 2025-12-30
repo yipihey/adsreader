@@ -1,15 +1,85 @@
 const { app, BrowserWindow, ipcMain, dialog, clipboard, shell, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const Store = require('electron-store');
 
+// iCloud container identifier (matches iOS entitlements)
+const ICLOUD_CONTAINER_ID = 'iCloud.io.adsreader.app';
+
+/**
+ * Get the iCloud container path for this app
+ * @returns {string} Path to iCloud container Documents folder
+ */
+function getICloudContainerPath() {
+  // iCloud container format: ~/Library/Mobile Documents/iCloud~{bundleId}/Documents/
+  // Container ID "iCloud.io.adsreader.app" becomes folder "iCloud~io~adsreader~app"
+  const folderName = ICLOUD_CONTAINER_ID.replace(/\./g, '~');
+  return path.join(os.homedir(), 'Library', 'Mobile Documents', folderName, 'Documents');
+}
+
+/**
+ * Check if iCloud is available on this system
+ * @returns {boolean}
+ */
+function isICloudAvailable() {
+  // Check if Mobile Documents folder exists (user is signed in to iCloud)
+  const mobileDocsPath = path.join(os.homedir(), 'Library', 'Mobile Documents');
+  return fs.existsSync(mobileDocsPath);
+}
+
+/**
+ * Ensure iCloud container directory exists
+ * @returns {boolean} Success
+ */
+function ensureICloudContainer() {
+  const containerPath = getICloudContainerPath();
+  try {
+    if (!fs.existsSync(containerPath)) {
+      fs.mkdirSync(containerPath, { recursive: true });
+    }
+    return true;
+  } catch (e) {
+    console.error('Failed to create iCloud container:', e);
+    return false;
+  }
+}
+
+/**
+ * Get fallback path for iCloud-like storage when real iCloud isn't available
+ * Used during development when app isn't code-signed
+ */
+function getICloudFallbackPath() {
+  return path.join(os.homedir(), 'Documents', 'ADSReader-Cloud');
+}
+
+/**
+ * Check if we can write to the iCloud container
+ */
+function canWriteToICloud() {
+  const containerPath = getICloudContainerPath();
+  const testPath = path.join(containerPath, '.write-test-' + Date.now());
+  try {
+    // Try to create parent directory
+    if (!fs.existsSync(containerPath)) {
+      fs.mkdirSync(containerPath, { recursive: true });
+    }
+    // Try to write a test file
+    fs.writeFileSync(testPath, 'test');
+    fs.unlinkSync(testPath);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 // Import modules
-const database = require('./src/main/database');
-const pdfImport = require('./src/main/pdf-import');
-const pdfDownload = require('./src/main/pdf-download');
-const adsApi = require('./src/main/ads-api');
-const bibtex = require('./src/main/bibtex');
-const { OllamaService, PROMPTS, chunkText, cosineSimilarity, parseSummaryResponse, parseMetadataResponse } = require('./src/main/llm-service');
+const database = require('./src/main/database.cjs');
+const pdfImport = require('./src/main/pdf-import.cjs');
+const pdfDownload = require('./src/main/pdf-download.cjs');
+const adsApi = require('./src/main/ads-api.cjs');
+const bibtex = require('./src/main/bibtex.cjs');
+const { OllamaService, PROMPTS, chunkText, cosineSimilarity, parseSummaryResponse, parseMetadataResponse } = require('./src/main/llm-service.cjs');
 
 // Initialize LLM service (will be configured from settings)
 let llmService = null;
@@ -297,7 +367,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false
     },
-    title: 'SciX Reader',
+    title: 'ADS Reader',
     show: false
   });
 
@@ -315,6 +385,22 @@ function createWindow() {
   if (process.argv.includes('--dev')) {
     mainWindow.webContents.openDevTools();
   }
+
+  // Toggle DevTools with Cmd+Option+I (macOS) or Ctrl+Shift+I (other)
+  const { globalShortcut } = require('electron');
+
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    // Check for Cmd+Option+I (macOS) or Ctrl+Shift+I (Windows/Linux)
+    const isMac = process.platform === 'darwin';
+    const toggleDevTools = (isMac && input.meta && input.alt && input.key === 'i') ||
+                           (!isMac && input.control && input.shift && input.key === 'I') ||
+                           input.key === 'F12';
+
+    if (toggleDevTools && input.type === 'keyDown') {
+      event.preventDefault();
+      mainWindow.webContents.toggleDevTools();
+    }
+  });
 }
 
 // Create library directory structure
@@ -335,7 +421,7 @@ function createLibraryStructure(libraryPath) {
 
   const bibPath = path.join(libraryPath, 'master.bib');
   if (!fs.existsSync(bibPath)) {
-    fs.writeFileSync(bibPath, '% SciX Reader Master BibTeX File\n% Auto-generated\n\n');
+    fs.writeFileSync(bibPath, '% ADS Reader Master BibTeX File\n% Auto-generated\n\n');
   }
 
   return true;
@@ -343,7 +429,26 @@ function createLibraryStructure(libraryPath) {
 
 // ===== Library Management IPC Handlers =====
 
-ipcMain.handle('get-library-path', () => store.get('libraryPath'));
+ipcMain.handle('get-library-path', () => {
+  // First try the stored library path
+  let libraryPath = store.get('libraryPath');
+
+  // If no path but we have a current library ID, find the library and get its path
+  if (!libraryPath) {
+    const currentId = store.get('currentLibraryId');
+    if (currentId) {
+      const allLibraries = getAllLibraries();
+      const currentLib = allLibraries.find(l => l.id === currentId);
+      if (currentLib && currentLib.exists) {
+        libraryPath = currentLib.fullPath;
+        // Update the store so it's consistent
+        store.set('libraryPath', libraryPath);
+      }
+    }
+  }
+
+  return libraryPath;
+});
 
 ipcMain.handle('get-pdf-zoom', () => store.get('pdfZoom'));
 ipcMain.handle('set-pdf-zoom', (event, zoom) => {
@@ -409,6 +514,627 @@ ipcMain.handle('check-cloud-status', (event, folderPath) => {
   }
 
   return { isCloud: false, provider: null };
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// iCLOUD LIBRARY MANAGEMENT
+// ═══════════════════════════════════════════════════════════════════════════
+
+ipcMain.handle('get-icloud-container-path', () => {
+  return getICloudContainerPath();
+});
+
+ipcMain.handle('is-icloud-available', () => {
+  return isICloudAvailable();
+});
+
+// Helper function to get all libraries (used internally and via IPC)
+function getAllLibraries() {
+  const libraries = [];
+
+  // Get iCloud libraries (check both real iCloud and fallback path)
+  const pathsToCheck = [];
+
+  if (isICloudAvailable()) {
+    pathsToCheck.push(getICloudContainerPath());
+  }
+
+  // Also check fallback path
+  const fallbackPath = getICloudFallbackPath();
+  if (fs.existsSync(fallbackPath)) {
+    pathsToCheck.push(fallbackPath);
+  }
+
+  for (const basePath of pathsToCheck) {
+    const librariesJsonPath = path.join(basePath, 'libraries.json');
+
+    try {
+      if (fs.existsSync(librariesJsonPath)) {
+        const data = JSON.parse(fs.readFileSync(librariesJsonPath, 'utf8'));
+        for (const lib of data.libraries || []) {
+          const libPath = path.join(basePath, lib.path);
+          const exists = fs.existsSync(libPath);
+          // Avoid duplicates
+          if (!libraries.find(l => l.id === lib.id)) {
+            libraries.push({
+              ...lib,
+              fullPath: libPath,
+              location: 'icloud',
+              exists
+            });
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Failed to read libraries from:', basePath, e);
+    }
+  }
+
+  // Get local libraries from preferences
+  const localLibraries = store.get('localLibraries') || [];
+  for (const lib of localLibraries) {
+    const exists = fs.existsSync(lib.path);
+    libraries.push({
+      ...lib,
+      fullPath: lib.path,
+      location: 'local',
+      exists
+    });
+  }
+
+  return libraries;
+}
+
+ipcMain.handle('get-all-libraries', async () => {
+  return getAllLibraries();
+});
+
+ipcMain.handle('create-library', async (event, { name, location }) => {
+  console.log('[create-library] Called with:', { name, location });
+  try {
+    const id = require('crypto').randomUUID();
+    const safeName = name.replace(/[^a-zA-Z0-9 _-]/g, '').trim() || 'Library';
+    let libraryPath;
+
+    console.log('[create-library] Safe name:', safeName);
+
+    if (location === 'icloud') {
+      console.log('[create-library] Checking iCloud availability...');
+      if (!isICloudAvailable()) {
+        console.log('[create-library] iCloud NOT available');
+        return { success: false, error: 'iCloud is not available. Make sure you are signed into iCloud.' };
+      }
+      console.log('[create-library] iCloud is available');
+
+      // Check if we can actually write to iCloud (requires code signing)
+      let iCloudPath;
+      if (canWriteToICloud()) {
+        console.log('[create-library] Can write to iCloud container');
+        iCloudPath = getICloudContainerPath();
+      } else {
+        console.log('[create-library] Cannot write to iCloud, using fallback path');
+        iCloudPath = getICloudFallbackPath();
+        // Ensure fallback directory exists
+        if (!fs.existsSync(iCloudPath)) {
+          fs.mkdirSync(iCloudPath, { recursive: true });
+        }
+        sendConsoleLog('Note: Using local cloud folder (app not code-signed for iCloud)', 'warn');
+      }
+      libraryPath = path.join(iCloudPath, safeName);
+
+      // Ensure unique name
+      let counter = 1;
+      while (fs.existsSync(libraryPath)) {
+        libraryPath = path.join(iCloudPath, `${safeName} ${counter}`);
+        counter++;
+      }
+
+      // Create library folder structure
+      createLibraryStructure(libraryPath);
+
+      // Update libraries.json
+      const librariesJsonPath = path.join(iCloudPath, 'libraries.json');
+      let data = { version: 1, libraries: [] };
+
+      if (fs.existsSync(librariesJsonPath)) {
+        try {
+          data = JSON.parse(fs.readFileSync(librariesJsonPath, 'utf8'));
+        } catch (e) { /* Use default */ }
+      }
+
+      data.libraries.push({
+        id,
+        name: safeName,
+        path: path.basename(libraryPath),
+        createdAt: new Date().toISOString(),
+        createdOn: 'macOS'
+      });
+
+      fs.writeFileSync(librariesJsonPath, JSON.stringify(data, null, 2));
+
+    } else {
+      // Local library - let user choose folder
+      const result = await dialog.showOpenDialog(mainWindow, {
+        title: 'Select Folder for New Library',
+        properties: ['openDirectory', 'createDirectory']
+      });
+
+      if (result.canceled || !result.filePaths[0]) {
+        return { success: false, error: 'No folder selected' };
+      }
+
+      libraryPath = result.filePaths[0];
+
+      // Create library structure
+      createLibraryStructure(libraryPath);
+
+      // Add to local libraries
+      const localLibraries = store.get('localLibraries') || [];
+      localLibraries.push({
+        id,
+        name: safeName,
+        path: libraryPath,
+        createdAt: new Date().toISOString()
+      });
+      store.set('localLibraries', localLibraries);
+    }
+
+    console.log('[create-library] Success! id:', id, 'path:', libraryPath);
+    return { success: true, id, path: libraryPath };
+  } catch (error) {
+    console.error('[create-library] Failed:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('switch-library', async (event, libraryId) => {
+  try {
+    // Find library by ID
+    const allLibraries = getAllLibraries();
+    const library = allLibraries.find(l => l.id === libraryId);
+
+    if (!library) {
+      return { success: false, error: 'Library not found' };
+    }
+
+    if (!library.exists) {
+      return { success: false, error: 'Library folder does not exist' };
+    }
+
+    // Close current database
+    database.closeDatabase();
+    dbInitialized = false;
+
+    // Initialize new database
+    await database.initDatabase(library.fullPath);
+    dbInitialized = true;
+
+    // Update current library path in preferences
+    store.set('libraryPath', library.fullPath);
+    store.set('currentLibraryId', libraryId);
+
+    return { success: true, path: library.fullPath };
+  } catch (error) {
+    console.error('Failed to switch library:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-current-library-id', () => {
+  return store.get('currentLibraryId') || null;
+});
+
+ipcMain.handle('delete-library', async (event, { libraryId, deleteFiles }) => {
+  try {
+    const allLibraries = getAllLibraries();
+    const library = allLibraries.find(l => l.id === libraryId);
+
+    if (!library) {
+      return { success: false, error: 'Library not found' };
+    }
+
+    // Don't allow deleting the current library
+    const currentId = store.get('currentLibraryId');
+    if (currentId === libraryId) {
+      return { success: false, error: 'Cannot delete the currently active library. Switch to another library first.' };
+    }
+
+    // Delete files if requested
+    if (deleteFiles && library.exists && library.fullPath) {
+      try {
+        fs.rmSync(library.fullPath, { recursive: true, force: true });
+        sendConsoleLog(`Deleted library folder: ${library.fullPath}`, 'info');
+      } catch (e) {
+        console.error('Failed to delete library folder:', e);
+        sendConsoleLog(`Warning: Could not delete folder: ${e.message}`, 'warn');
+      }
+    }
+
+    // Remove from appropriate list
+    if (library.location === 'icloud') {
+      // Update libraries.json - check both iCloud path and fallback path
+      const pathsToCheck = [
+        path.join(getICloudContainerPath(), 'libraries.json'),
+        path.join(getICloudFallbackPath(), 'libraries.json')
+      ];
+
+      for (const librariesJsonPath of pathsToCheck) {
+        if (fs.existsSync(librariesJsonPath)) {
+          try {
+            const data = JSON.parse(fs.readFileSync(librariesJsonPath, 'utf8'));
+            const originalCount = (data.libraries || []).length;
+            data.libraries = (data.libraries || []).filter(l => l.id !== libraryId);
+            if (data.libraries.length !== originalCount) {
+              fs.writeFileSync(librariesJsonPath, JSON.stringify(data, null, 2));
+              sendConsoleLog(`Removed library from ${librariesJsonPath}`, 'info');
+            }
+          } catch (e) {
+            console.error('Failed to update libraries.json:', e);
+          }
+        }
+      }
+    } else {
+      // Remove from local libraries in preferences
+      const localLibraries = store.get('localLibraries') || [];
+      store.set('localLibraries', localLibraries.filter(l => l.id !== libraryId));
+    }
+
+    sendConsoleLog(`Library "${library.name}" deleted`, 'success');
+    return { success: true };
+  } catch (error) {
+    console.error('Failed to delete library:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+/**
+ * Get detailed file information for a library
+ * Returns list of files and total size for deletion confirmation
+ */
+ipcMain.handle('get-library-file-info', async (event, libraryId) => {
+  try {
+    const allLibraries = getAllLibraries();
+    const library = allLibraries.find(l => l.id === libraryId);
+
+    if (!library || !library.exists || !library.fullPath) {
+      return { files: [], totalSize: 0, error: 'Library not found or path unavailable' };
+    }
+
+    const files = [];
+    let totalSize = 0;
+
+    function walkDir(dir, prefix = '') {
+      try {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          const fullPath = path.join(dir, entry.name);
+          const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+
+          if (entry.isDirectory()) {
+            walkDir(fullPath, relativePath);
+          } else {
+            try {
+              const stats = fs.statSync(fullPath);
+              files.push({
+                path: relativePath,
+                size: stats.size
+              });
+              totalSize += stats.size;
+            } catch (e) {
+              // Skip files we can't stat
+            }
+          }
+        }
+      } catch (e) {
+        // Skip directories we can't read
+      }
+    }
+
+    walkDir(library.fullPath);
+
+    return {
+      files,
+      totalSize,
+      libraryPath: library.fullPath
+    };
+  } catch (error) {
+    console.error('Failed to get library file info:', error);
+    return { files: [], totalSize: 0, error: error.message };
+  }
+});
+
+// ===== Library Migration IPC Handlers =====
+
+/**
+ * Check if migration is needed for existing users
+ * Returns info about existing library that isn't registered
+ */
+ipcMain.handle('check-migration-needed', async () => {
+  const existingPath = store.get('libraryPath');
+  const currentLibraryId = store.get('currentLibraryId');
+  const migrationDone = store.get('migrationCompleted');
+
+  // If migration already done or no existing path, no migration needed
+  if (migrationDone || !existingPath || !fs.existsSync(existingPath)) {
+    return { needed: false };
+  }
+
+  // If we already have a current library ID, the library is registered
+  if (currentLibraryId) {
+    return { needed: false };
+  }
+
+  // Check if this path is already in iCloud
+  const iCloudPath = getICloudContainerPath();
+  const isInICloud = existingPath.startsWith(iCloudPath);
+
+  // Check if iCloud is available
+  const iCloudAvailable = isICloudAvailable();
+
+  // Get library name from path
+  const libraryName = path.basename(existingPath);
+
+  // Count papers in existing library
+  let paperCount = 0;
+  try {
+    await database.initDatabase(existingPath);
+    dbInitialized = true;
+    const stats = database.getStats();
+    paperCount = stats.total;
+  } catch (e) {
+    console.error('Failed to count papers:', e);
+  }
+
+  return {
+    needed: true,
+    existingPath,
+    libraryName,
+    paperCount,
+    isInICloud,
+    iCloudAvailable
+  };
+});
+
+/**
+ * Migrate existing library to iCloud
+ * Moves the library folder to iCloud container and registers it
+ */
+ipcMain.handle('migrate-library-to-icloud', async (event, { libraryPath }) => {
+  try {
+    if (!isICloudAvailable()) {
+      return {
+        success: false,
+        error: 'iCloud container not found. Please run the iOS app first to initialize iCloud sync, or create an iCloud library from the library picker.'
+      };
+    }
+
+    if (!ensureICloudContainer()) {
+      return {
+        success: false,
+        error: 'Cannot write to iCloud container. Please check iCloud Drive is enabled and try again.'
+      };
+    }
+
+    const iCloudPath = getICloudContainerPath();
+    const libraryName = path.basename(libraryPath);
+
+    // Determine target path (ensure unique name)
+    let targetPath = path.join(iCloudPath, libraryName);
+    let counter = 1;
+    while (fs.existsSync(targetPath) && targetPath !== libraryPath) {
+      targetPath = path.join(iCloudPath, `${libraryName} ${counter}`);
+      counter++;
+    }
+
+    // Close database before moving
+    database.closeDatabase();
+    dbInitialized = false;
+
+    // Move or copy the library folder
+    if (libraryPath !== targetPath) {
+      // Copy recursively then delete original (safer than move across volumes)
+      copyFolderSync(libraryPath, targetPath);
+      fs.rmSync(libraryPath, { recursive: true, force: true });
+    }
+
+    // Generate library ID
+    const id = require('crypto').randomUUID();
+
+    // Update libraries.json
+    const librariesJsonPath = path.join(iCloudPath, 'libraries.json');
+    let data = { version: 1, libraries: [] };
+
+    if (fs.existsSync(librariesJsonPath)) {
+      try {
+        data = JSON.parse(fs.readFileSync(librariesJsonPath, 'utf8'));
+      } catch (e) { /* Use default */ }
+    }
+
+    data.libraries.push({
+      id,
+      name: libraryName,
+      path: path.basename(targetPath),
+      createdAt: new Date().toISOString(),
+      createdOn: 'macOS',
+      migratedFrom: 'local'
+    });
+
+    fs.writeFileSync(librariesJsonPath, JSON.stringify(data, null, 2));
+
+    // Update preferences
+    store.set('libraryPath', targetPath);
+    store.set('currentLibraryId', id);
+    store.set('migrationCompleted', true);
+
+    // Reinitialize database at new location
+    await database.initDatabase(targetPath);
+    dbInitialized = true;
+
+    sendConsoleLog(`Library migrated to iCloud: ${targetPath}`, 'success');
+
+    return { success: true, path: targetPath, id };
+  } catch (error) {
+    console.error('Failed to migrate library to iCloud:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+/**
+ * Register existing library as local (desktop-only)
+ * Adds to localLibraries without moving
+ */
+ipcMain.handle('register-library-local', async (event, { libraryPath }) => {
+  try {
+    const id = require('crypto').randomUUID();
+    const libraryName = path.basename(libraryPath);
+
+    // Add to local libraries
+    const localLibraries = store.get('localLibraries') || [];
+    localLibraries.push({
+      id,
+      name: libraryName,
+      path: libraryPath,
+      createdAt: new Date().toISOString(),
+      createdOn: 'macOS'
+    });
+    store.set('localLibraries', localLibraries);
+
+    // Update preferences
+    store.set('currentLibraryId', id);
+    store.set('libraryPath', libraryPath);
+    store.set('migrationCompleted', true);
+
+    sendConsoleLog(`Library registered as local: ${libraryPath}`, 'success');
+
+    return { success: true, path: libraryPath, id };
+  } catch (error) {
+    console.error('Failed to register local library:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+/**
+ * Helper: Copy folder recursively (for cross-volume migration)
+ */
+function copyFolderSync(source, target) {
+  if (!fs.existsSync(target)) {
+    fs.mkdirSync(target, { recursive: true });
+  }
+
+  const items = fs.readdirSync(source);
+  for (const item of items) {
+    const srcPath = path.join(source, item);
+    const tgtPath = path.join(target, item);
+    const stat = fs.statSync(srcPath);
+
+    if (stat.isDirectory()) {
+      copyFolderSync(srcPath, tgtPath);
+    } else {
+      fs.copyFileSync(srcPath, tgtPath);
+    }
+  }
+}
+
+// ===== Conflict Detection IPC Handlers =====
+
+/**
+ * Check for iCloud sync conflicts in a library folder
+ * iCloud creates files like "library 2.sqlite" or "library (conflicted copy).sqlite"
+ */
+ipcMain.handle('check-library-conflicts', async (event, libraryPath) => {
+  if (!libraryPath || !fs.existsSync(libraryPath)) {
+    return { hasConflicts: false, conflicts: [] };
+  }
+
+  try {
+    const files = fs.readdirSync(libraryPath);
+    const conflicts = [];
+
+    // Patterns for conflict files (macOS iCloud)
+    // - "library 2.sqlite" (numeric suffix)
+    // - "library-2.sqlite" (dash + number)
+    // - "library (conflicted copy from MacBook).sqlite"
+    const conflictPatterns = [
+      /library[\s-]\d+\.sqlite$/i,
+      /library\s*\(.*conflict.*\)\.sqlite$/i,
+      /library\.sqlite\s+\d+$/i
+    ];
+
+    for (const file of files) {
+      for (const pattern of conflictPatterns) {
+        if (pattern.test(file)) {
+          const filePath = path.join(libraryPath, file);
+          const stat = fs.statSync(filePath);
+          conflicts.push({
+            filename: file,
+            path: filePath,
+            modified: stat.mtime,
+            size: stat.size
+          });
+          break;
+        }
+      }
+    }
+
+    return {
+      hasConflicts: conflicts.length > 0,
+      conflicts,
+      mainDatabase: path.join(libraryPath, 'library.sqlite'),
+      mainExists: fs.existsSync(path.join(libraryPath, 'library.sqlite'))
+    };
+  } catch (error) {
+    console.error('Error checking for conflicts:', error);
+    return { hasConflicts: false, conflicts: [], error: error.message };
+  }
+});
+
+/**
+ * Resolve a conflict by choosing which version to keep
+ * @param action - 'keep-current' | 'keep-conflict' | 'backup-both'
+ */
+ipcMain.handle('resolve-library-conflict', async (event, { libraryPath, conflictPath, action }) => {
+  try {
+    const mainDbPath = path.join(libraryPath, 'library.sqlite');
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+
+    if (action === 'keep-current') {
+      // Just delete the conflict file
+      fs.unlinkSync(conflictPath);
+      sendConsoleLog('Conflict resolved: kept current version', 'success');
+    } else if (action === 'keep-conflict') {
+      // Backup current, replace with conflict
+      const backupPath = path.join(libraryPath, `library-backup-${timestamp}.sqlite`);
+      if (fs.existsSync(mainDbPath)) {
+        fs.renameSync(mainDbPath, backupPath);
+      }
+      fs.renameSync(conflictPath, mainDbPath);
+      sendConsoleLog('Conflict resolved: using other device version', 'success');
+    } else if (action === 'backup-both') {
+      // Backup both, keep main as is
+      const conflictBackup = path.join(libraryPath, `library-conflict-${timestamp}.sqlite`);
+      const mainBackup = path.join(libraryPath, `library-current-${timestamp}.sqlite`);
+
+      // Copy main to backup
+      if (fs.existsSync(mainDbPath)) {
+        fs.copyFileSync(mainDbPath, mainBackup);
+      }
+
+      // Move conflict to backup
+      fs.renameSync(conflictPath, conflictBackup);
+      sendConsoleLog('Both versions backed up. Using current version.', 'success');
+    }
+
+    // Reload database
+    database.closeDatabase();
+    dbInitialized = false;
+    await database.initDatabase(libraryPath);
+    dbInitialized = true;
+
+    return { success: true };
+  } catch (error) {
+    console.error('Failed to resolve conflict:', error);
+    return { success: false, error: error.message };
+  }
 });
 
 ipcMain.handle('get-library-info', async (event, libraryPath) => {
@@ -1298,21 +2024,21 @@ ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
   return { success: true, results };
 });
 
-// ===== SciX Search & Import IPC Handlers =====
+// ===== ADS Search & Import IPC Handlers =====
 
-ipcMain.handle('scix-search', async (event, query, options = {}) => {
+ipcMain.handle('ads-import-search', async (event, query, options = {}) => {
   const token = store.get('adsToken');
   if (!token) return { success: false, error: 'No ADS API token configured' };
 
   try {
-    sendConsoleLog(`SciX search: "${query.substring(0, 50)}${query.length > 50 ? '...' : ''}"`, 'info');
+    sendConsoleLog(`ADS search: "${query.substring(0, 50)}${query.length > 50 ? '...' : ''}"`, 'info');
     const result = await adsApi.search(token, query, {
       rows: options.rows || 1000,
       start: options.start || 0,
       sort: options.sort || 'date desc'
     });
 
-    sendConsoleLog(`SciX found ${result.numFound} results`, 'success');
+    sendConsoleLog(`ADS found ${result.numFound} results`, 'success');
 
     // Check which papers are already in library
     const papers = result.docs.map(doc => {
@@ -1334,7 +2060,7 @@ ipcMain.handle('scix-search', async (event, query, options = {}) => {
   }
 });
 
-ipcMain.handle('import-from-scix', async (event, selectedPapers) => {
+ipcMain.handle('ads-import-papers', async (event, selectedPapers) => {
   const token = store.get('adsToken');
   const libraryPath = store.get('libraryPath');
 
@@ -1342,7 +2068,7 @@ ipcMain.handle('import-from-scix', async (event, selectedPapers) => {
   if (!libraryPath) return { success: false, error: 'No library selected' };
   if (!dbInitialized) return { success: false, error: 'Database not initialized' };
 
-  sendConsoleLog(`SciX import: ${selectedPapers.length} papers selected`, 'info');
+  sendConsoleLog(`ADS import: ${selectedPapers.length} papers selected`, 'info');
 
   const results = {
     imported: [],

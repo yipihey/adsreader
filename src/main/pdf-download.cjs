@@ -1,4 +1,4 @@
-// SciX Reader - PDF Download Module
+// ADS Reader - PDF Download Module
 
 const https = require('https');
 const http = require('http');

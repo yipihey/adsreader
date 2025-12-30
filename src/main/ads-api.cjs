@@ -1,4 +1,4 @@
-// SciX Reader - NASA ADS/SciX API Module
+// ADS Reader - NASA ADS API Module
 // Integration with NASA ADS (Astrophysics Data System) API
 
 const https = require('https');

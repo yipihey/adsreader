@@ -1,7 +1,7 @@
-# SciX Reader - Claude Code Context
+# ADS Reader - Claude Code Context
 
 ## Project Overview
-SciX Reader is an Electron desktop app for managing academic papers. It integrates with NASA ADS (Astrophysics Data System) for metadata, references, citations, and PDF downloads.
+ADS Reader is an Electron desktop app for managing academic papers. It integrates with NASA ADS (Astrophysics Data System) for metadata, references, citations, and PDF downloads.
 
 ## Architecture
 

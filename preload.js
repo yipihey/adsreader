@@ -1,5 +1,5 @@
 /**
- * SciX Reader - Preload Script
+ * ADS Reader - Preload Script
  * Exposes IPC methods to the renderer process via window.electronAPI
  *
  * Methods are organized by category:
@@ -7,7 +7,7 @@
  * - PDF Settings: Zoom, page positions
  * - Paper Management: CRUD operations, import, search
  * - ADS Integration: Search, sync, references, citations, esources
- * - SciX Search: Alternative search and import
+ * - ADS Search: Paper search and import
  * - BibTeX: Citation copying, export, import
  * - Collections: Folder organization
  * - References/Citations: Paper relationships
@@ -26,6 +26,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
   selectLibraryFolder: () => ipcRenderer.invoke('select-library-folder'),
   checkCloudStatus: (path) => ipcRenderer.invoke('check-cloud-status', path),
   getLibraryInfo: (path) => ipcRenderer.invoke('get-library-info', path),
+
+  // iCloud Library Management
+  getICloudContainerPath: () => ipcRenderer.invoke('get-icloud-container-path'),
+  isICloudAvailable: () => ipcRenderer.invoke('is-icloud-available'),
+  getAllLibraries: () => ipcRenderer.invoke('get-all-libraries'),
+  createLibrary: (options) => ipcRenderer.invoke('create-library', options),
+  switchLibrary: (libraryId) => ipcRenderer.invoke('switch-library', libraryId),
+  deleteLibrary: (options) => ipcRenderer.invoke('delete-library', options),
+  getLibraryFileInfo: (libraryId) => ipcRenderer.invoke('get-library-file-info', libraryId),
+  getCurrentLibraryId: () => ipcRenderer.invoke('get-current-library-id'),
+
+  // Library Migration
+  checkMigrationNeeded: () => ipcRenderer.invoke('check-migration-needed'),
+  migrateLibraryToICloud: (options) => ipcRenderer.invoke('migrate-library-to-icloud', options),
+  registerLibraryLocal: (options) => ipcRenderer.invoke('register-library-local', options),
+
+  // Library Conflict Detection
+  checkLibraryConflicts: (libraryPath) => ipcRenderer.invoke('check-library-conflicts', libraryPath),
+  resolveLibraryConflict: (options) => ipcRenderer.invoke('resolve-library-conflict', options),
 
   // ═══════════════════════════════════════════════════════════════════════════
   // PDF SETTINGS
@@ -75,10 +94,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   removeAdsSyncListeners: () => ipcRenderer.removeAllListeners('ads-sync-progress'),
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // SCIX SEARCH & IMPORT
+  // ADS SEARCH & IMPORT
   // ═══════════════════════════════════════════════════════════════════════════
-  scixSearch: (query, options) => ipcRenderer.invoke('scix-search', query, options),
-  importFromScix: (papers) => ipcRenderer.invoke('import-from-scix', papers),
+  adsImportSearch: (query, options) => ipcRenderer.invoke('ads-import-search', query, options),
+  adsImportPapers: (papers) => ipcRenderer.invoke('ads-import-papers', papers),
   onImportProgress: (callback) => ipcRenderer.on('import-progress', (event, data) => callback(data)),
   onImportComplete: (callback) => ipcRenderer.on('import-complete', (event, data) => callback(data)),
   removeImportListeners: () => {

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; script-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net 'unsafe-inline'; style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; font-src 'self' https://cdn.jsdelivr.net; img-src 'self' data: blob:; connect-src 'self' file:">
-  <title>SciX Reader</title>
+  <title>ADS Reader</title>
   <link rel="stylesheet" href="styles.css">
   <!-- KaTeX for LaTeX rendering -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
@@ -18,24 +18,26 @@
   <div id="setup-screen" class="screen">
     <div class="setup-container">
       <div class="setup-icon">📚</div>
-      <h1>Welcome to SciX Reader</h1>
-      <p class="setup-subtitle">A scientific publication reader with NASA ADS/SciX integration</p>
+      <h1>Welcome to ADS Reader</h1>
+      <p class="setup-subtitle">A scientific publication reader with NASA ADS integration</p>
 
       <div class="setup-section">
         <h2>Choose Your Library Location</h2>
         <p>Select a folder where your papers will be stored. For automatic sync across devices, choose a folder in iCloud Drive, Google Drive, or Dropbox.</p>
 
-        <div class="cloud-suggestion">
-          <div class="cloud-icon">☁️</div>
-          <div>
-            <strong>Recommended:</strong> Store in iCloud Drive<br>
-            <span class="suggestion-detail">Your papers will sync across all your devices</span>
+        <div class="setup-buttons">
+          <button id="create-icloud-library-btn" class="primary-button icloud-btn">
+            <span class="btn-icon">☁️</span> Create iCloud Library
+          </button>
+          <div class="setup-divider">
+            <span>or</span>
           </div>
+          <button id="select-folder-btn" class="secondary-button">
+            Select Local Folder
+          </button>
         </div>
 
-        <button id="select-folder-btn" class="primary-button">
-          Select Library Folder
-        </button>
+        <p class="setup-hint">iCloud libraries sync automatically across all your Apple devices</p>
       </div>
 
       <div id="selected-path" class="selected-path hidden">
@@ -53,7 +55,7 @@
     <!-- Sidebar -->
     <div class="sidebar" id="sidebar">
       <div class="sidebar-header">
-        <h1>SciX Reader</h1>
+        <h1>ADS Reader</h1>
         <button id="reload-btn" class="reload-btn" title="Reload App (Cmd+R)">↻</button>
       </div>
 
@@ -127,12 +129,29 @@
         </div>
       </div>
 
-      <div class="sidebar-footer">
-        <div class="library-info">
-          <span id="library-status">●</span>
-          <span id="library-path-display">No library</span>
+      <!-- Library Picker -->
+      <div class="library-picker" id="library-picker">
+        <div class="current-library" id="current-library" title="Click to switch libraries">
+          <span class="library-icon" id="library-icon">☁️</span>
+          <div class="library-details">
+            <span class="library-name" id="library-name">No Library</span>
+            <span class="library-count" id="library-count">0 papers</span>
+          </div>
+          <span class="expand-icon">▼</span>
         </div>
-        <button id="change-library-btn" class="text-button">Change</button>
+        <div class="library-dropdown hidden" id="library-dropdown">
+          <div class="library-list" id="library-list">
+            <!-- Libraries will be populated here -->
+          </div>
+          <div class="library-actions">
+            <button class="new-library-btn" id="new-icloud-library">
+              <span class="btn-icon">☁️</span> New iCloud Library
+            </button>
+            <button class="new-library-btn local desktop-only" id="new-local-library">
+              <span class="btn-icon">💻</span> New Local Library
+            </button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -148,7 +167,7 @@
           <div class="list-toolbar">
             <button id="import-btn" class="import-btn" title="Import PDF">+</button>
             <button id="import-bib-btn" class="import-btn" title="Import .bib file">.bib</button>
-            <button id="scix-search-btn" class="scix-btn" title="Search SciX">SciX</button>
+            <button id="ads-search-btn" class="ads-btn" title="Search ADS">ADS</button>
             <button id="ads-sync-btn" class="sync-btn" title="Sync selected papers with ADS">⟳</button>
             <div class="search-wrapper">
               <input type="text" id="search-input" placeholder="Search... (/)">
@@ -432,7 +451,7 @@
   </div>
 
   <!-- ADS Token Modal -->
-  <div class="modal hidden" id="ads-modal">
+  <div class="modal hidden" id="ads-token-modal">
     <div class="modal-content">
       <h2>NASA ADS API Token</h2>
       <p>Enter your ADS API token to enable metadata lookup, references, and citations.</p>
@@ -501,53 +520,53 @@
     </div>
   </div>
 
-  <!-- SciX Search Modal -->
-  <div class="modal hidden" id="scix-modal">
-    <div class="modal-content scix-modal-content">
-      <div class="scix-modal-header">
-        <h2>Search SciX</h2>
-        <button class="modal-close-btn" id="scix-close-btn">&times;</button>
+  <!-- ADS Search Modal -->
+  <div class="modal hidden" id="ads-search-modal">
+    <div class="modal-content ads-modal-content">
+      <div class="ads-modal-header">
+        <h2>Search ADS</h2>
+        <button class="modal-close-btn" id="ads-close-btn">&times;</button>
       </div>
 
-      <div class="scix-search-bar">
-        <input type="text" id="scix-query-input" placeholder="e.g., author:smith year:2020-2024 galaxy">
-        <button class="primary-button" id="scix-search-execute-btn">Search</button>
+      <div class="ads-search-bar">
+        <input type="text" id="ads-query-input" placeholder="e.g., author:smith year:2020-2024 galaxy">
+        <button class="primary-button" id="ads-search-execute-btn">Search</button>
       </div>
 
-      <div class="scix-shortcuts">
-        <button class="scix-shortcut-btn" data-insert="author:">author:</button>
-        <button class="scix-shortcut-btn" data-insert="year:">year:</button>
-        <button class="scix-shortcut-btn" data-insert="title:">title:</button>
-        <button class="scix-shortcut-btn" data-insert="abs:">abs:</button>
-        <button class="scix-shortcut-btn" data-insert="bibcode:">bibcode:</button>
-        <button class="scix-shortcut-btn" data-insert="arXiv:">arXiv:</button>
-        <button class="scix-shortcut-btn" data-insert="doi:">doi:</button>
+      <div class="ads-shortcuts">
+        <button class="ads-shortcut-btn" data-insert="author:">author:</button>
+        <button class="ads-shortcut-btn" data-insert="year:">year:</button>
+        <button class="ads-shortcut-btn" data-insert="title:">title:</button>
+        <button class="ads-shortcut-btn" data-insert="abs:">abs:</button>
+        <button class="ads-shortcut-btn" data-insert="bibcode:">bibcode:</button>
+        <button class="ads-shortcut-btn" data-insert="arXiv:">arXiv:</button>
+        <button class="ads-shortcut-btn" data-insert="doi:">doi:</button>
       </div>
 
-      <div class="scix-results-header hidden" id="scix-results-header">
-        <span id="scix-results-count">0 papers found</span>
-        <div class="scix-select-buttons">
-          <button class="text-button" id="scix-select-all-btn">Select All</button>
-          <button class="text-button" id="scix-select-none-btn">None</button>
+      <div class="ads-results-header hidden" id="ads-results-header">
+        <span id="ads-results-count">0 papers found</span>
+        <div class="ads-select-buttons">
+          <button class="text-button" id="ads-select-all-btn">Select All</button>
+          <button class="text-button" id="ads-select-none-btn">None</button>
         </div>
       </div>
 
-      <div class="scix-results-list" id="scix-results-list">
-        <div class="scix-empty-state">
-          <p>Enter a search query to find papers in SciX/NASA ADS</p>
+      <div class="ads-results-list" id="ads-results-list">
+        <div class="ads-empty-state">
+          <p>Enter a search query to find papers in NASA ADS</p>
         </div>
       </div>
 
-      <div class="scix-progress hidden" id="scix-progress">
+      <div class="ads-progress hidden" id="ads-progress">
         <div class="progress-bar">
-          <div class="progress-fill" id="scix-progress-fill"></div>
+          <div class="progress-fill" id="ads-progress-fill"></div>
         </div>
-        <div class="progress-text" id="scix-progress-text">Importing...</div>
+        <div class="progress-text" id="ads-progress-text">Importing...</div>
       </div>
 
-      <div class="scix-modal-footer">
-        <span class="scix-selected-count" id="scix-selected-count">0 selected</span>
-        <button class="primary-button" id="scix-import-btn" disabled>Import Selected</button>
+      <div class="ads-modal-footer">
+        <span class="ads-selected-count" id="ads-selected-count">0 selected</span>
+        <button class="primary-button" id="ads-import-btn" disabled>Import Selected</button>
       </div>
     </div>
   </div>
@@ -574,8 +593,8 @@
 
   <!-- ADS Lookup Modal -->
   <div class="modal hidden" id="ads-lookup-modal">
-    <div class="modal-content scix-modal-content">
-      <div class="scix-modal-header">
+    <div class="modal-content ads-modal-content">
+      <div class="ads-modal-header">
         <h2>Find Paper in ADS</h2>
         <button class="modal-close-btn" id="ads-lookup-close-btn">&times;</button>
       </div>
@@ -584,30 +603,30 @@
         <p>Search ADS to find metadata for: <strong id="ads-lookup-paper-title">Paper Title</strong></p>
       </div>
 
-      <div class="scix-search-bar">
+      <div class="ads-search-bar">
         <input type="text" id="ads-lookup-query" placeholder="e.g., author:smith year:2020 title:galaxy">
         <button class="primary-button" id="ads-lookup-search-btn">Search</button>
       </div>
 
-      <div class="scix-shortcuts">
-        <button class="scix-shortcut-btn" data-insert="author:">author:</button>
-        <button class="scix-shortcut-btn" data-insert="year:">year:</button>
-        <button class="scix-shortcut-btn" data-insert="title:">title:</button>
-        <button class="scix-shortcut-btn" data-insert="bibcode:">bibcode:</button>
-        <button class="scix-shortcut-btn" data-insert="doi:">doi:</button>
+      <div class="ads-shortcuts">
+        <button class="ads-shortcut-btn" data-insert="author:">author:</button>
+        <button class="ads-shortcut-btn" data-insert="year:">year:</button>
+        <button class="ads-shortcut-btn" data-insert="title:">title:</button>
+        <button class="ads-shortcut-btn" data-insert="bibcode:">bibcode:</button>
+        <button class="ads-shortcut-btn" data-insert="doi:">doi:</button>
       </div>
 
       <div class="ads-lookup-status hidden" id="ads-lookup-status">
         <span id="ads-lookup-status-text">Extracting metadata with AI...</span>
       </div>
 
-      <div class="scix-results-list" id="ads-lookup-results">
-        <div class="scix-empty-state">
+      <div class="ads-results-list" id="ads-lookup-results">
+        <div class="ads-empty-state">
           <p>Click Search to find matching papers in ADS</p>
         </div>
       </div>
 
-      <div class="scix-modal-footer">
+      <div class="ads-modal-footer">
         <button class="text-button" id="ads-lookup-cancel-btn">Close</button>
       </div>
     </div>
@@ -668,6 +687,118 @@
     </div>
   </div>
 
+  <!-- Library Conflict Modal -->
+  <div class="modal hidden" id="conflict-modal">
+    <div class="modal-content" style="max-width: 500px;">
+      <h2>Sync Conflict Detected</h2>
+      <p>This library has changes from multiple devices that couldn't be merged automatically.</p>
+
+      <div class="conflict-files">
+        <div class="conflict-file main">
+          <div class="conflict-file-icon">💻</div>
+          <div class="conflict-file-details">
+            <div class="conflict-file-name">Current Version</div>
+            <div class="conflict-file-meta" id="conflict-current-meta">This device's version</div>
+          </div>
+        </div>
+        <div class="conflict-file other">
+          <div class="conflict-file-icon">📱</div>
+          <div class="conflict-file-details">
+            <div class="conflict-file-name" id="conflict-other-name">Other Device</div>
+            <div class="conflict-file-meta" id="conflict-other-meta">Modified on another device</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="conflict-actions">
+        <button class="conflict-btn keep-current" id="conflict-keep-current">
+          Keep This Device
+        </button>
+        <button class="conflict-btn keep-other" id="conflict-keep-other">
+          Use Other Version
+        </button>
+        <button class="conflict-btn backup-both" id="conflict-backup-both">
+          Backup Both
+        </button>
+      </div>
+
+      <p class="conflict-note">Choosing "Backup Both" will save both versions and keep using the current one.</p>
+    </div>
+  </div>
+
+  <!-- Delete Library Confirmation Modal -->
+  <div class="modal hidden" id="delete-library-modal">
+    <div class="modal-content" style="max-width: 550px;">
+      <h2>Delete Library</h2>
+      <p id="delete-library-message">Are you sure you want to delete this library?</p>
+
+      <div class="delete-library-info">
+        <div class="delete-library-name" id="delete-library-name">Library Name</div>
+        <div class="delete-library-path" id="delete-library-path">/path/to/library</div>
+        <div class="delete-library-size" id="delete-library-size">Total size: 0 MB</div>
+      </div>
+
+      <div class="delete-library-files" id="delete-library-files-section">
+        <div class="delete-library-files-header">Files to be deleted:</div>
+        <div class="delete-library-file-list" id="delete-library-file-list">
+          <!-- File list populated by JS -->
+        </div>
+      </div>
+
+      <div class="delete-library-actions">
+        <button class="delete-library-btn danger" id="delete-library-delete-files">
+          Delete Library & Files
+        </button>
+        <button class="delete-library-btn" id="delete-library-remove-only">
+          Remove from List Only
+        </button>
+        <button class="delete-library-btn cancel" id="delete-library-cancel">
+          Cancel
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Library Migration Modal -->
+  <div class="modal hidden" id="migration-modal">
+    <div class="modal-content" style="max-width: 500px;">
+      <h2>Welcome to the New ADS Reader</h2>
+      <p id="migration-message">
+        We found an existing library with <strong id="migration-paper-count">0</strong> papers.
+        Would you like to enable iCloud sync so your library is accessible on all your devices?
+      </p>
+
+      <div class="migration-options">
+        <div class="migration-option" id="migrate-icloud-option">
+          <div class="migration-option-icon">☁️</div>
+          <div class="migration-option-details">
+            <div class="migration-option-title">Move to iCloud</div>
+            <div class="migration-option-desc">Sync across Mac and iPhone/iPad</div>
+          </div>
+        </div>
+
+        <div class="migration-option" id="migrate-local-option">
+          <div class="migration-option-icon">💻</div>
+          <div class="migration-option-details">
+            <div class="migration-option-title">Keep Local</div>
+            <div class="migration-option-desc">Desktop-only, no sync</div>
+          </div>
+        </div>
+      </div>
+
+      <div id="migration-icloud-unavailable" class="migration-warning hidden">
+        <p>iCloud is not available. Your library will be kept local.</p>
+      </div>
+
+      <div id="migration-progress" class="hidden">
+        <p>Migrating library... Please wait.</p>
+        <div class="progress-bar">
+          <div class="progress-fill" id="migration-progress-fill"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Text Selection Context Menu (for AI Explain and Notes) -->
   <div class="context-menu hidden" id="text-context-menu">
     <div class="context-menu-item" id="ctx-add-note">Add Note</div>
@@ -687,6 +818,9 @@
     </div>
   </div>
 
+  <!-- Platform initialization (for iOS/Capacitor only) -->
+  <script type="module" src="platform-init.js"></script>
+  <!-- app.js is loaded differently for Electron (direct) vs iOS (bundled by vite) -->
   <script src="app.js"></script>
 </body>
 </html>

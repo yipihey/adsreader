@@ -1,4 +1,4 @@
-# SciX Reader - Data Schemas Reference
+# ADS Reader - Data Schemas Reference
 
 This document describes the database schema, key object shapes, and IPC API for future development reference.
 

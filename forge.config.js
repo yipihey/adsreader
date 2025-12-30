@@ -4,9 +4,21 @@ const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 module.exports = {
   packagerConfig: {
     asar: true,
-    name: 'SciX Reader',
-    executableName: 'SciX Reader',
-    appBundleId: 'com.scixreader.app',
+    name: 'ADS Reader',
+    executableName: 'ADS Reader',
+    appBundleId: 'io.adsreader.app',
+    // macOS code signing - uncomment when you have a Developer ID certificate
+    // osxSign: {
+    //   identity: 'Developer ID Application: YOUR NAME (TEAM_ID)',
+    //   hardenedRuntime: true,
+    //   entitlements: 'entitlements.mac.plist',
+    //   'entitlements-inherit': 'entitlements.mac.plist',
+    // },
+    // osxNotarize: {
+    //   appleId: process.env.APPLE_ID,
+    //   appleIdPassword: process.env.APPLE_ID_PASSWORD,
+    //   teamId: process.env.APPLE_TEAM_ID,
+    // },
   },
   rebuildConfig: {},
   makers: [

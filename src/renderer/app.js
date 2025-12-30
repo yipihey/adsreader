@@ -1,9 +1,10 @@
-// SciX Reader - Main Renderer Application
+// ADS Reader - Main Renderer Application
+console.log('[app.js] Loading...');
 
 // Configure PDF.js worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
-class SciXReader {
+class ADSReader {
   constructor() {
     this.libraryPath = null;
     this.papers = [];
@@ -14,6 +15,7 @@ class SciXReader {
     this.currentCollection = null;
     this.collections = [];
     this.hasAdsToken = false;
+    this.isIOS = false; // Platform detection
 
     // PDF state
     this.pdfDoc = null;
@@ -24,9 +26,9 @@ class SciXReader {
     this.isRendering = false; // Prevent concurrent renders
     this.pendingRender = null; // Queue next render if one is in progress
 
-    // SciX search state
-    this.scixResults = [];
-    this.scixSelected = new Set();
+    // ADS search state
+    this.adsResults = [];
+    this.adsSelected = new Set();
 
     // Refs/Cites import state
     this.currentRefs = [];
@@ -56,6 +58,36 @@ class SciXReader {
   }
 
   async init() {
+    // Wait for platform initialization (sets up window.electronAPI on iOS)
+    if (window._platformReady) {
+      try {
+        await window._platformReady;
+        console.log('[ADSReader] Platform ready');
+      } catch (error) {
+        console.error('[ADSReader] Platform initialization failed:', error);
+        alert('Failed to initialize app. Please restart.');
+        return;
+      }
+    }
+
+    // Detect platform (iOS vs macOS/Electron)
+    // Check multiple ways: API property, body class (set by platform-init.js), or Capacitor
+    this.isIOS = window.electronAPI?.platform === 'ios' ||
+                 document.body.classList.contains('ios') ||
+                 window.Capacitor?.getPlatform?.() === 'ios';
+
+    if (this.isIOS) {
+      document.body.classList.add('ios-platform');
+      console.log('[ADSReader] Running on iOS');
+    }
+
+    // Ensure electronAPI is available
+    if (!window.electronAPI) {
+      console.error('[ADSReader] No electronAPI available');
+      alert('App initialization failed. No API available.');
+      return;
+    }
+
     this.libraryPath = await window.electronAPI.getLibraryPath();
 
     // Load saved PDF zoom level
@@ -67,6 +99,9 @@ class SciXReader {
     // Load saved PDF page positions
     this.pdfPagePositions = await window.electronAPI.getPdfPositions() || {};
 
+    // Check if migration is needed for existing users
+    await this.checkMigration();
+
     if (this.libraryPath) {
       const info = await window.electronAPI.getLibraryInfo(this.libraryPath);
       if (info) {
@@ -75,6 +110,9 @@ class SciXReader {
         await this.loadCollections();
         await this.checkAdsToken();
         await this.checkLlmConnection();
+
+        // Check for sync conflicts (iCloud)
+        await this.checkConflicts();
 
         // Restore last selected paper (with delay to ensure DOM is ready)
         const lastPaperId = await window.electronAPI.getLastSelectedPaper();
@@ -92,12 +130,648 @@ class SciXReader {
     }
 
     this.setupEventListeners();
-    document.title = 'SciX Reader';
+    this.setupLibraryPicker();
+    document.title = 'ADS Reader';
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // LIBRARY PICKER
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  async setupLibraryPicker() {
+    console.log('[setupLibraryPicker] Starting...');
+    const picker = document.getElementById('library-picker');
+    const currentLibrary = document.getElementById('current-library');
+    const dropdown = document.getElementById('library-dropdown');
+    const libraryList = document.getElementById('library-list');
+
+    console.log('[setupLibraryPicker] Elements:', { picker: !!picker, currentLibrary: !!currentLibrary, dropdown: !!dropdown, libraryList: !!libraryList });
+
+    if (!picker || !currentLibrary || !dropdown) {
+      console.error('[setupLibraryPicker] Missing required elements, returning early!');
+      return;
+    }
+
+    // Toggle dropdown on click
+    currentLibrary.addEventListener('click', () => {
+      picker.classList.toggle('open');
+      dropdown.classList.toggle('hidden');
+      if (!dropdown.classList.contains('hidden')) {
+        this.loadLibraryList();
+      }
+    });
+
+    // Close dropdown when clicking outside
+    document.addEventListener('click', (e) => {
+      if (!picker.contains(e.target)) {
+        picker.classList.remove('open');
+        dropdown.classList.add('hidden');
+      }
+    });
+
+    // New library buttons
+    const icloudBtn = document.getElementById('new-icloud-library');
+    const localBtn = document.getElementById('new-local-library');
+
+    console.log('[setupLibraryPicker] iCloud button:', icloudBtn);
+    console.log('[setupLibraryPicker] Local button:', localBtn);
+
+    if (icloudBtn) {
+      icloudBtn.addEventListener('click', (e) => {
+        console.log('[iCloud button] CLICKED!');
+        e.stopPropagation();
+        e.preventDefault();
+        this.createNewLibrary('icloud');
+      });
+      console.log('[setupLibraryPicker] iCloud button handler attached');
+    } else {
+      console.error('[setupLibraryPicker] iCloud button NOT FOUND!');
+    }
+
+    if (localBtn) {
+      localBtn.addEventListener('click', (e) => {
+        console.log('[Local button] CLICKED!');
+        e.stopPropagation();
+        e.preventDefault();
+        this.createNewLibrary('local');
+      });
+      console.log('[setupLibraryPicker] Local button handler attached');
+    }
+
+    // Load initial library info
+    await this.updateLibraryPickerDisplay();
+  }
+
+  async loadLibraryList() {
+    const libraryList = document.getElementById('library-list');
+    if (!libraryList) return;
+
+    try {
+      const libraries = await window.electronAPI.getAllLibraries();
+      const currentId = await window.electronAPI.getCurrentLibraryId();
+
+      // Separate by location
+      const iCloudLibs = libraries.filter(l => l.location === 'icloud');
+      const localLibs = libraries.filter(l => l.location === 'local');
+
+      let html = '';
+
+      if (iCloudLibs.length > 0) {
+        html += '<div class="library-section-label">iCloud</div>';
+        for (const lib of iCloudLibs) {
+          const isActive = lib.id === currentId;
+          html += `
+            <div class="library-item ${isActive ? 'active' : ''}" data-id="${lib.id}">
+              <span class="lib-icon">☁️</span>
+              <span class="lib-name">${this.escapeHtml(lib.name)}</span>
+              <button class="lib-delete-btn" data-id="${lib.id}" title="Delete library">✕</button>
+            </div>
+          `;
+        }
+      }
+
+      if (localLibs.length > 0) {
+        html += '<div class="library-section-label">Local</div>';
+        for (const lib of localLibs) {
+          const isActive = lib.id === currentId;
+          html += `
+            <div class="library-item ${isActive ? 'active' : ''}" data-id="${lib.id}">
+              <span class="lib-icon">💻</span>
+              <span class="lib-name">${this.escapeHtml(lib.name)}</span>
+              <button class="lib-delete-btn" data-id="${lib.id}" title="Delete library">✕</button>
+            </div>
+          `;
+        }
+      }
+
+      if (libraries.length === 0) {
+        html = '<div class="library-section-label">No libraries yet</div>';
+      }
+
+      libraryList.innerHTML = html;
+
+      // Add click handlers for library items
+      libraryList.querySelectorAll('.library-item').forEach(item => {
+        item.addEventListener('click', (e) => {
+          // Don't switch if clicking delete button
+          if (e.target.classList.contains('lib-delete-btn')) return;
+          this.switchToLibrary(item.dataset.id);
+        });
+      });
+
+      // Add click handlers for delete buttons
+      libraryList.querySelectorAll('.lib-delete-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.confirmDeleteLibrary(btn.dataset.id);
+        });
+      });
+    } catch (error) {
+      console.error('Failed to load libraries:', error);
+      libraryList.innerHTML = '<div class="library-section-label">Error loading libraries</div>';
+    }
+  }
+
+  async updateLibraryPickerDisplay() {
+    const nameEl = document.getElementById('library-name');
+    const countEl = document.getElementById('library-count');
+    const iconEl = document.getElementById('library-icon');
+
+    if (!nameEl) return;
+
+    if (this.libraryPath) {
+      // Get current library info
+      const libraries = await window.electronAPI.getAllLibraries?.() || [];
+      const currentId = await window.electronAPI.getCurrentLibraryId?.();
+      const currentLib = libraries.find(l => l.id === currentId);
+
+      if (currentLib) {
+        nameEl.textContent = currentLib.name;
+        iconEl.textContent = currentLib.location === 'icloud' ? '☁️' : '💻';
+      } else {
+        // Fallback to path basename
+        nameEl.textContent = this.libraryPath.split('/').pop() || 'Library';
+        iconEl.textContent = '📁';
+      }
+
+      countEl.textContent = `${this.papers?.length || 0} papers`;
+    } else {
+      nameEl.textContent = 'No Library';
+      countEl.textContent = 'Select or create a library';
+      iconEl.textContent = '📁';
+    }
+  }
+
+  async createNewLibrary(location) {
+    console.log('[createNewLibrary] Called with location:', location);
+
+    // Close the dropdown first
+    document.getElementById('library-picker')?.classList.remove('open');
+    document.getElementById('library-dropdown')?.classList.add('hidden');
+
+    // Use custom prompt since Electron doesn't support native prompt()
+    const name = await this.showPrompt(`Enter name for new ${location} library:`, 'My Library');
+    console.log('[createNewLibrary] User entered name:', name);
+    if (!name) {
+      console.log('[createNewLibrary] No name entered, returning');
+      return;
+    }
+
+    try {
+      console.log('[createNewLibrary] Calling createLibrary API...');
+      const result = await window.electronAPI.createLibrary({ name, location });
+      console.log('[createNewLibrary] Result:', result);
+      if (result.success) {
+        this.consoleLog(`Created new ${location} library: ${name}`, 'success');
+
+        // Switch to the new library
+        await this.switchToLibrary(result.id);
+
+        // Show main screen if we were on setup screen
+        const setupScreen = document.getElementById('setup-screen');
+        if (setupScreen && !setupScreen.classList.contains('hidden')) {
+          this.showMainScreen({ path: result.path, name });
+        }
+      } else {
+        this.consoleLog(`Failed to create library: ${result.error}`, 'error');
+        alert(`Failed to create library: ${result.error}`);
+      }
+    } catch (error) {
+      console.error('Failed to create library:', error);
+      this.consoleLog(`Error creating library: ${error.message}`, 'error');
+    }
+  }
+
+  async switchToLibrary(libraryId) {
+    try {
+      const result = await window.electronAPI.switchLibrary(libraryId);
+      if (result.success) {
+        this.libraryPath = result.path;
+        this.consoleLog(`Switched to library at ${result.path}`, 'success');
+
+        // Reload papers and collections
+        await this.loadPapers();
+        await this.loadCollections();
+        await this.updateLibraryPickerDisplay();
+
+        // Clear selection
+        this.clearPaperDisplay();
+      } else {
+        this.consoleLog(`Failed to switch library: ${result.error}`, 'error');
+        alert(`Failed to switch library: ${result.error}`);
+      }
+    } catch (error) {
+      console.error('Failed to switch library:', error);
+      this.consoleLog(`Error switching library: ${error.message}`, 'error');
+    }
+
+    // Close dropdown
+    document.getElementById('library-picker')?.classList.remove('open');
+    document.getElementById('library-dropdown')?.classList.add('hidden');
+  }
+
+  async confirmDeleteLibrary(libraryId) {
+    // Find library info
+    const libraries = await window.electronAPI.getAllLibraries();
+    const library = libraries.find(l => l.id === libraryId);
+
+    if (!library) {
+      alert('Library not found');
+      return;
+    }
+
+    // Get file info for the library
+    const fileInfo = await window.electronAPI.getLibraryFileInfo(libraryId);
+
+    // Show delete modal
+    const modal = document.getElementById('delete-library-modal');
+    const nameEl = document.getElementById('delete-library-name');
+    const pathEl = document.getElementById('delete-library-path');
+    const sizeEl = document.getElementById('delete-library-size');
+    const fileListEl = document.getElementById('delete-library-file-list');
+    const filesSectionEl = document.getElementById('delete-library-files-section');
+
+    // Populate modal
+    nameEl.textContent = library.name;
+    pathEl.textContent = fileInfo.libraryPath || library.fullPath || 'Unknown path';
+    sizeEl.textContent = `Total size: ${this.formatFileSize(fileInfo.totalSize)}`;
+
+    // Populate file list
+    if (fileInfo.files && fileInfo.files.length > 0) {
+      filesSectionEl.style.display = 'block';
+
+      // Group files by type
+      const filesByType = {
+        database: [],
+        papers: [],
+        text: [],
+        other: []
+      };
+
+      for (const file of fileInfo.files) {
+        if (file.path.endsWith('.sqlite')) {
+          filesByType.database.push(file);
+        } else if (file.path.startsWith('papers/')) {
+          filesByType.papers.push(file);
+        } else if (file.path.startsWith('text/')) {
+          filesByType.text.push(file);
+        } else {
+          filesByType.other.push(file);
+        }
+      }
+
+      let fileListHtml = '';
+
+      // Show summary counts
+      if (filesByType.database.length > 0) {
+        fileListHtml += `<div class="file-group">
+          <span class="file-group-icon">🗄️</span>
+          <span class="file-group-name">Database</span>
+          <span class="file-group-count">${filesByType.database.length} file(s)</span>
+          <span class="file-group-size">${this.formatFileSize(filesByType.database.reduce((sum, f) => sum + f.size, 0))}</span>
+        </div>`;
+      }
+
+      if (filesByType.papers.length > 0) {
+        fileListHtml += `<div class="file-group">
+          <span class="file-group-icon">📄</span>
+          <span class="file-group-name">PDF Papers</span>
+          <span class="file-group-count">${filesByType.papers.length} file(s)</span>
+          <span class="file-group-size">${this.formatFileSize(filesByType.papers.reduce((sum, f) => sum + f.size, 0))}</span>
+        </div>`;
+      }
+
+      if (filesByType.text.length > 0) {
+        fileListHtml += `<div class="file-group">
+          <span class="file-group-icon">📝</span>
+          <span class="file-group-name">Extracted Text</span>
+          <span class="file-group-count">${filesByType.text.length} file(s)</span>
+          <span class="file-group-size">${this.formatFileSize(filesByType.text.reduce((sum, f) => sum + f.size, 0))}</span>
+        </div>`;
+      }
+
+      if (filesByType.other.length > 0) {
+        fileListHtml += `<div class="file-group">
+          <span class="file-group-icon">📁</span>
+          <span class="file-group-name">Other Files</span>
+          <span class="file-group-count">${filesByType.other.length} file(s)</span>
+          <span class="file-group-size">${this.formatFileSize(filesByType.other.reduce((sum, f) => sum + f.size, 0))}</span>
+        </div>`;
+      }
+
+      fileListEl.innerHTML = fileListHtml;
+    } else {
+      filesSectionEl.style.display = 'none';
+    }
+
+    // Show modal
+    modal.classList.remove('hidden');
+
+    // Set up button handlers
+    return new Promise((resolve) => {
+      const deleteFilesBtn = document.getElementById('delete-library-delete-files');
+      const removeOnlyBtn = document.getElementById('delete-library-remove-only');
+      const cancelBtn = document.getElementById('delete-library-cancel');
+
+      const cleanup = () => {
+        modal.classList.add('hidden');
+        deleteFilesBtn.removeEventListener('click', handleDeleteFiles);
+        removeOnlyBtn.removeEventListener('click', handleRemoveOnly);
+        cancelBtn.removeEventListener('click', handleCancel);
+      };
+
+      const handleDeleteFiles = async () => {
+        cleanup();
+        await this.executeDeleteLibrary(libraryId, library.name, true);
+        resolve(true);
+      };
+
+      const handleRemoveOnly = async () => {
+        cleanup();
+        await this.executeDeleteLibrary(libraryId, library.name, false);
+        resolve(true);
+      };
+
+      const handleCancel = () => {
+        cleanup();
+        resolve(false);
+      };
+
+      deleteFilesBtn.addEventListener('click', handleDeleteFiles);
+      removeOnlyBtn.addEventListener('click', handleRemoveOnly);
+      cancelBtn.addEventListener('click', handleCancel);
+    });
+  }
+
+  async executeDeleteLibrary(libraryId, libraryName, deleteFiles) {
+    try {
+      const result = await window.electronAPI.deleteLibrary({
+        libraryId,
+        deleteFiles
+      });
+
+      if (result.success) {
+        this.consoleLog(`Library "${libraryName}" deleted${deleteFiles ? ' with files' : ''}`, 'success');
+        await this.loadLibraryList();
+      } else {
+        alert(`Failed to delete library: ${result.error}`);
+      }
+    } catch (error) {
+      console.error('Failed to delete library:', error);
+      alert(`Error deleting library: ${error.message}`);
+    }
+  }
+
+  formatFileSize(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  }
+
+  escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  // Custom prompt dialog since Electron doesn't support native prompt()
+  showPrompt(message, defaultValue = '') {
+    return new Promise((resolve) => {
+      // Create modal elements
+      const overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:10000;';
+
+      const dialog = document.createElement('div');
+      dialog.style.cssText = 'background:var(--bg-primary,#1e1e1e);border-radius:8px;padding:20px;min-width:300px;box-shadow:0 4px 20px rgba(0,0,0,0.3);';
+
+      const label = document.createElement('div');
+      label.textContent = message;
+      label.style.cssText = 'margin-bottom:12px;color:var(--text-primary,#fff);font-size:14px;';
+
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.value = defaultValue;
+      input.style.cssText = 'width:100%;padding:8px;border:1px solid var(--border,#444);border-radius:4px;background:var(--bg-secondary,#2d2d2d);color:var(--text-primary,#fff);font-size:14px;box-sizing:border-box;';
+
+      const buttons = document.createElement('div');
+      buttons.style.cssText = 'display:flex;gap:10px;margin-top:16px;justify-content:flex-end;';
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.textContent = 'Cancel';
+      cancelBtn.style.cssText = 'padding:8px 16px;border:1px solid var(--border,#444);border-radius:4px;background:transparent;color:var(--text-primary,#fff);cursor:pointer;';
+
+      const okBtn = document.createElement('button');
+      okBtn.textContent = 'OK';
+      okBtn.style.cssText = 'padding:8px 16px;border:none;border-radius:4px;background:var(--accent,#007aff);color:#fff;cursor:pointer;';
+
+      buttons.appendChild(cancelBtn);
+      buttons.appendChild(okBtn);
+      dialog.appendChild(label);
+      dialog.appendChild(input);
+      dialog.appendChild(buttons);
+      overlay.appendChild(dialog);
+      document.body.appendChild(overlay);
+
+      input.focus();
+      input.select();
+
+      const cleanup = () => document.body.removeChild(overlay);
+
+      okBtn.onclick = () => { cleanup(); resolve(input.value.trim()); };
+      cancelBtn.onclick = () => { cleanup(); resolve(null); };
+      input.onkeydown = (e) => {
+        if (e.key === 'Enter') { cleanup(); resolve(input.value.trim()); }
+        if (e.key === 'Escape') { cleanup(); resolve(null); }
+      };
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // LIBRARY MIGRATION
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  async checkMigration() {
+    try {
+      const migration = await window.electronAPI.checkMigrationNeeded();
+
+      if (migration.needed) {
+        this.showMigrationModal(migration);
+      }
+    } catch (error) {
+      console.error('Failed to check migration:', error);
+    }
+  }
+
+  showMigrationModal(migration) {
+    const modal = document.getElementById('migration-modal');
+    const paperCountEl = document.getElementById('migration-paper-count');
+    const iCloudOption = document.getElementById('migrate-icloud-option');
+    const localOption = document.getElementById('migrate-local-option');
+    const unavailableWarning = document.getElementById('migration-icloud-unavailable');
+
+    if (!modal) return;
+
+    // Update paper count
+    paperCountEl.textContent = migration.paperCount || 0;
+
+    // Handle iCloud availability
+    if (!migration.iCloudAvailable) {
+      iCloudOption.style.display = 'none';
+      unavailableWarning.classList.remove('hidden');
+    } else {
+      iCloudOption.style.display = 'flex';
+      unavailableWarning.classList.add('hidden');
+    }
+
+    // If already in iCloud, just register it
+    if (migration.isInICloud) {
+      // Auto-register as iCloud library
+      this.handleMigrationChoice('icloud', migration.existingPath);
+      return;
+    }
+
+    // Set up click handlers
+    iCloudOption.onclick = () => this.handleMigrationChoice('icloud', migration.existingPath);
+    localOption.onclick = () => this.handleMigrationChoice('local', migration.existingPath);
+
+    // Show modal
+    modal.classList.remove('hidden');
+  }
+
+  async handleMigrationChoice(choice, libraryPath) {
+    const modal = document.getElementById('migration-modal');
+    const optionsDiv = document.querySelector('.migration-options');
+    const progressDiv = document.getElementById('migration-progress');
+
+    try {
+      // Show progress
+      if (optionsDiv) optionsDiv.style.display = 'none';
+      if (progressDiv) progressDiv.classList.remove('hidden');
+
+      let result;
+      if (choice === 'icloud') {
+        result = await window.electronAPI.migrateLibraryToICloud({ libraryPath });
+      } else {
+        result = await window.electronAPI.registerLibraryLocal({ libraryPath });
+      }
+
+      if (result.success) {
+        this.consoleLog(
+          choice === 'icloud'
+            ? 'Library migrated to iCloud successfully!'
+            : 'Library registered as local.',
+          'success'
+        );
+
+        // Update library path and reload
+        this.libraryPath = result.path;
+        await this.loadPapers();
+        await this.loadCollections();
+        await this.updateLibraryPickerDisplay();
+      } else {
+        this.consoleLog(`Migration failed: ${result.error}`, 'error');
+        alert(`Migration failed: ${result.error}`);
+      }
+    } catch (error) {
+      console.error('Migration error:', error);
+      this.consoleLog(`Migration error: ${error.message}`, 'error');
+    }
+
+    // Hide modal
+    modal.classList.add('hidden');
+    if (optionsDiv) optionsDiv.style.display = 'flex';
+    if (progressDiv) progressDiv.classList.add('hidden');
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // LIBRARY CONFLICT DETECTION
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  async checkConflicts() {
+    if (!this.libraryPath) return;
+
+    try {
+      const result = await window.electronAPI.checkLibraryConflicts?.(this.libraryPath);
+
+      if (result?.hasConflicts && result.conflicts.length > 0) {
+        this.showConflictModal(result.conflicts[0]);
+      }
+    } catch (error) {
+      console.error('Failed to check conflicts:', error);
+    }
+  }
+
+  showConflictModal(conflict) {
+    const modal = document.getElementById('conflict-modal');
+    const otherName = document.getElementById('conflict-other-name');
+    const otherMeta = document.getElementById('conflict-other-meta');
+
+    if (!modal) return;
+
+    // Store current conflict for resolution
+    this.currentConflict = conflict;
+
+    // Update conflict info
+    if (otherName) {
+      otherName.textContent = conflict.filename;
+    }
+    if (otherMeta) {
+      const date = new Date(conflict.modified);
+      otherMeta.textContent = `Modified: ${date.toLocaleDateString()} ${date.toLocaleTimeString()}`;
+    }
+
+    // Set up button handlers
+    document.getElementById('conflict-keep-current')?.addEventListener('click', () => {
+      this.resolveConflict('keep-current');
+    }, { once: true });
+
+    document.getElementById('conflict-keep-other')?.addEventListener('click', () => {
+      this.resolveConflict('keep-conflict');
+    }, { once: true });
+
+    document.getElementById('conflict-backup-both')?.addEventListener('click', () => {
+      this.resolveConflict('backup-both');
+    }, { once: true });
+
+    modal.classList.remove('hidden');
+  }
+
+  async resolveConflict(action) {
+    const modal = document.getElementById('conflict-modal');
+
+    try {
+      const result = await window.electronAPI.resolveLibraryConflict({
+        libraryPath: this.libraryPath,
+        conflictPath: this.currentConflict.path,
+        action
+      });
+
+      if (result.success) {
+        this.consoleLog('Sync conflict resolved successfully', 'success');
+
+        // Reload papers after resolution
+        await this.loadPapers();
+        await this.loadCollections();
+      } else {
+        this.consoleLog(`Failed to resolve conflict: ${result.error}`, 'error');
+        alert(`Failed to resolve conflict: ${result.error}`);
+      }
+    } catch (error) {
+      console.error('Conflict resolution error:', error);
+      this.consoleLog(`Error resolving conflict: ${error.message}`, 'error');
+    }
+
+    // Hide modal
+    modal?.classList.add('hidden');
+    this.currentConflict = null;
   }
 
   setupEventListeners() {
     // Setup screen
     document.getElementById('select-folder-btn')?.addEventListener('click', () => this.selectLibraryFolder());
+    document.getElementById('create-icloud-library-btn')?.addEventListener('click', () => this.createNewLibrary('icloud'));
 
     // Console panel toggle
     document.getElementById('console-header')?.addEventListener('click', () => this.toggleConsole());
@@ -181,8 +855,8 @@ class SciXReader {
     }
 
     // ADS settings
-    document.getElementById('ads-settings-btn')?.addEventListener('click', () => this.showAdsModal());
-    document.getElementById('ads-cancel-btn')?.addEventListener('click', () => this.hideAdsModal());
+    document.getElementById('ads-settings-btn')?.addEventListener('click', () => this.showAdsTokenModal());
+    document.getElementById('ads-cancel-btn')?.addEventListener('click', () => this.hideAdsTokenModal());
     document.getElementById('ads-save-btn')?.addEventListener('click', () => this.saveAdsToken());
 
     // Preferences
@@ -227,16 +901,16 @@ class SciXReader {
       });
     });
 
-    // SciX Search
-    document.getElementById('scix-search-btn')?.addEventListener('click', () => this.showScixModal());
-    document.getElementById('scix-close-btn')?.addEventListener('click', () => this.hideScixModal());
-    document.getElementById('scix-search-execute-btn')?.addEventListener('click', () => this.executeScixSearch());
-    document.getElementById('scix-query-input')?.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') this.executeScixSearch();
+    // ADS Search
+    document.getElementById('ads-search-btn')?.addEventListener('click', () => this.showAdsSearchModal());
+    document.getElementById('ads-close-btn')?.addEventListener('click', () => this.hideAdsSearchModal());
+    document.getElementById('ads-search-execute-btn')?.addEventListener('click', () => this.executeAdsSearch());
+    document.getElementById('ads-query-input')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') this.executeAdsSearch();
     });
-    document.getElementById('scix-select-all-btn')?.addEventListener('click', () => this.scixSelectAll());
-    document.getElementById('scix-select-none-btn')?.addEventListener('click', () => this.scixSelectNone());
-    document.getElementById('scix-import-btn')?.addEventListener('click', () => this.importScixSelected());
+    document.getElementById('ads-select-all-btn')?.addEventListener('click', () => this.adsSelectAll());
+    document.getElementById('ads-select-none-btn')?.addEventListener('click', () => this.adsSelectNone());
+    document.getElementById('ads-import-btn')?.addEventListener('click', () => this.importAdsSelected());
 
     // ADS Lookup Modal
     document.getElementById('ads-lookup-close-btn')?.addEventListener('click', () => this.hideAdsLookupModal());
@@ -253,7 +927,7 @@ class SciXReader {
     document.getElementById('ads-sync-close-btn')?.addEventListener('click', () => this.hideAdsSyncModal());
 
     // ADS lookup shortcut buttons
-    document.querySelectorAll('#ads-lookup-modal .scix-shortcut-btn').forEach(btn => {
+    document.querySelectorAll('#ads-lookup-modal .ads-shortcut-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const input = document.getElementById('ads-lookup-query');
         const insert = btn.dataset.insert;
@@ -262,10 +936,10 @@ class SciXReader {
       });
     });
 
-    // SciX shortcut buttons
-    document.querySelectorAll('.scix-shortcut-btn').forEach(btn => {
+    // ADS shortcut buttons
+    document.querySelectorAll('.ads-shortcut-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        const input = document.getElementById('scix-query-input');
+        const input = document.getElementById('ads-query-input');
         const insertText = btn.dataset.insert;
         const start = input.selectionStart;
         const end = input.selectionEnd;
@@ -276,7 +950,7 @@ class SciXReader {
       });
     });
 
-    // SciX import progress listeners
+    // ADS import progress listeners
     window.electronAPI.onImportProgress((data) => this.updateImportProgress(data));
     window.electronAPI.onImportComplete((data) => this.handleImportComplete(data));
 
@@ -732,6 +1406,17 @@ class SciXReader {
   showSetupScreen() {
     document.getElementById('setup-screen').classList.remove('hidden');
     document.getElementById('main-screen').classList.add('hidden');
+
+    console.log('[ADSReader] showSetupScreen called, isIOS:', this.isIOS);
+
+    // On iOS, immediately trigger the library selection/creation flow
+    if (this.isIOS) {
+      console.log('[ADSReader] Scheduling iOS library flow...');
+      setTimeout(() => {
+        console.log('[ADSReader] iOS library flow triggered');
+        this.selectOrCreateIOSLibrary();
+      }, 100);
+    }
   }
 
   showMainScreen(info) {
@@ -741,6 +1426,13 @@ class SciXReader {
   }
 
   async selectLibraryFolder() {
+    // On iOS, use the iCloud library creation flow instead of folder picker
+    if (this.isIOS) {
+      await this.selectOrCreateIOSLibrary();
+      return;
+    }
+
+    // macOS/Electron: use folder picker
     const selectedPath = await window.electronAPI.selectLibraryFolder();
 
     if (selectedPath) {
@@ -774,16 +1466,204 @@ class SciXReader {
     }
   }
 
-  updateLibraryDisplay(info) {
-    document.getElementById('paper-count').textContent = info.paperCount;
-    document.getElementById('unread-count').textContent = info.unreadCount || 0;
-    document.getElementById('reading-count').textContent = info.readingCount || 0;
-    document.getElementById('read-count').textContent = info.readCount || 0;
+  async selectOrCreateIOSLibrary() {
+    console.log('[iOS] selectOrCreateIOSLibrary called');
+    // Check for existing libraries first
+    try {
+      console.log('[iOS] Calling getAllLibraries...');
+      const libraries = await window.electronAPI.getAllLibraries();
+      console.log('[iOS] Libraries found:', libraries.length);
 
+      if (libraries.length > 0) {
+        // Show library picker
+        this.showIOSLibraryPicker(libraries);
+      } else {
+        // No libraries exist - show create button
+        console.log('[iOS] No libraries, showing create button');
+        this.showIOSCreateLibrary();
+      }
+    } catch (error) {
+      console.error('[iOS] Failed to get libraries:', error);
+      this.showIOSCreateLibrary();
+    }
+  }
+
+  showIOSCreateLibrary() {
+    console.log('[iOS] showIOSCreateLibrary called');
+    const setupContainer = document.querySelector('.setup-container');
+    console.log('[iOS] setupContainer:', setupContainer ? 'found' : 'NOT FOUND');
+    if (!setupContainer) return;
+
+    console.log('[iOS] Updating setup container innerHTML');
+    setupContainer.innerHTML = `
+      <div class="setup-icon">📚</div>
+      <h1>Welcome to ADS Reader</h1>
+      <p class="setup-subtitle">Create your first library to get started</p>
+
+      <div class="ios-library-actions" style="margin-top: 32px;">
+        <button id="ios-create-library-btn" class="primary-button">
+          Create iCloud Library
+        </button>
+      </div>
+    `;
+
+    document.getElementById('ios-create-library-btn')?.addEventListener('click', () => {
+      this.showIOSLibraryNameInput();
+    });
+  }
+
+  showIOSLibraryNameInput() {
+    const setupContainer = document.querySelector('.setup-container');
+    if (!setupContainer) return;
+
+    setupContainer.innerHTML = `
+      <div class="setup-icon">📚</div>
+      <h1>Name Your Library</h1>
+      <p class="setup-subtitle">Choose a name for your paper library</p>
+
+      <div class="ios-name-input" style="margin-top: 24px;">
+        <input type="text" id="ios-library-name" class="text-input"
+               placeholder="My Library" value="My Library"
+               style="width: 100%; max-width: 300px; padding: 12px; font-size: 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-secondary); color: var(--text-primary);">
+      </div>
+
+      <div class="ios-library-actions" style="margin-top: 24px;">
+        <button id="ios-confirm-create-btn" class="primary-button">
+          Create Library
+        </button>
+      </div>
+    `;
+
+    const input = document.getElementById('ios-library-name');
+    input?.focus();
+    input?.select();
+
+    document.getElementById('ios-confirm-create-btn')?.addEventListener('click', async () => {
+      const name = input?.value?.trim() || 'My Library';
+      await this.createIOSLibraryWithName(name);
+    });
+
+    // Also handle enter key
+    input?.addEventListener('keypress', async (e) => {
+      if (e.key === 'Enter') {
+        const name = input?.value?.trim() || 'My Library';
+        await this.createIOSLibraryWithName(name);
+      }
+    });
+  }
+
+  async createIOSLibraryWithName(name) {
+    try {
+      const btn = document.getElementById('ios-confirm-create-btn');
+      if (btn) {
+        btn.textContent = 'Creating...';
+        btn.disabled = true;
+      }
+
+      const result = await window.electronAPI.createLibrary({ name, location: 'icloud' });
+
+      if (result.success) {
+        console.log('[iOS] Library created:', result.id);
+        await this.switchToLibrary(result.id);
+      } else {
+        alert(`Failed to create library: ${result.error}`);
+        this.showIOSCreateLibrary();
+      }
+    } catch (error) {
+      console.error('[iOS] Failed to create library:', error);
+      alert(`Error creating library: ${error.message}`);
+      this.showIOSCreateLibrary();
+    }
+  }
+
+  showIOSLibraryPicker(libraries) {
+    // Update setup screen to show library selection
+    const setupContainer = document.querySelector('.setup-container');
+    if (!setupContainer) return;
+
+    let html = `
+      <div class="setup-icon">📚</div>
+      <h1>Choose Library</h1>
+      <p class="setup-subtitle">Select an existing library or create a new one</p>
+
+      <div class="ios-library-list">
+    `;
+
+    for (const lib of libraries) {
+      const icon = lib.location === 'icloud' ? '☁️' : '💻';
+      html += `
+        <div class="ios-library-item" data-id="${lib.id}">
+          <span class="lib-icon">${icon}</span>
+          <div class="lib-info">
+            <span class="lib-name">${this.escapeHtml(lib.name)}</span>
+            <span class="lib-location">${lib.location === 'icloud' ? 'iCloud' : 'Local'}</span>
+          </div>
+        </div>
+      `;
+    }
+
+    html += `
+      </div>
+      <div class="ios-library-actions">
+        <button id="ios-new-library-btn" class="primary-button">
+          Create New iCloud Library
+        </button>
+      </div>
+    `;
+
+    setupContainer.innerHTML = html;
+
+    // Add click handlers
+    setupContainer.querySelectorAll('.ios-library-item').forEach(item => {
+      item.addEventListener('click', () => this.switchToLibrary(item.dataset.id));
+    });
+
+    document.getElementById('ios-new-library-btn')?.addEventListener('click', () => {
+      this.createIOSLibrary();
+    });
+  }
+
+  async createIOSLibrary() {
+    const name = prompt('Enter library name:', 'My Library');
+    if (!name) return;
+
+    try {
+      const result = await window.electronAPI.createLibrary({ name, location: 'icloud' });
+
+      if (result.success) {
+        // Switch to the new library
+        await this.switchToLibrary(result.id);
+      } else {
+        alert(`Failed to create library: ${result.error}`);
+      }
+    } catch (error) {
+      console.error('Failed to create iOS library:', error);
+      alert(`Error creating library: ${error.message}`);
+    }
+  }
+
+  updateLibraryDisplay(info) {
+    if (!info) {
+      console.warn('[updateLibraryDisplay] No info provided');
+      return;
+    }
+
+    const paperCount = document.getElementById('paper-count');
+    const unreadCount = document.getElementById('unread-count');
+    const readingCount = document.getElementById('reading-count');
+    const readCount = document.getElementById('read-count');
     const pathDisplay = document.getElementById('library-path-display');
-    const folderName = info.path.split('/').pop();
-    pathDisplay.textContent = folderName;
-    pathDisplay.title = info.path;
+
+    if (paperCount) paperCount.textContent = info.paperCount || 0;
+    if (unreadCount) unreadCount.textContent = info.unreadCount || 0;
+    if (readingCount) readingCount.textContent = info.readingCount || 0;
+    if (readCount) readCount.textContent = info.readCount || 0;
+
+    if (pathDisplay && info.path) {
+      const folderName = info.path.split('/').pop();
+      pathDisplay.textContent = folderName;
+      pathDisplay.title = info.path;
+    }
   }
 
   async loadPapers() {
@@ -955,7 +1835,7 @@ class SciXReader {
     this.selectedPaper = null;
     document.getElementById('viewer-wrapper').classList.add('hidden');
     document.getElementById('detail-placeholder').classList.remove('hidden');
-    document.title = 'SciX Reader';
+    document.title = 'ADS Reader';
   }
 
   // Context menu methods
@@ -1200,7 +2080,7 @@ class SciXReader {
     const authorSuffix = paper.authors?.length > 3 ? ' et al.' : '';
     const windowTitle = paper.title
       ? `${paper.title} — ${firstAuthors}${authorSuffix}${paper.year ? ` (${paper.year})` : ''}`
-      : 'SciX Reader';
+      : 'ADS Reader';
     document.title = windowTitle;
 
     // Update bottom bar (simplified - just show journal/bibcode)
@@ -1778,8 +2658,8 @@ class SciXReader {
     btn.disabled = true;
 
     try {
-      // Import the paper using the SciX import
-      const result = await window.electronAPI.importFromScix([{ bibcode }]);
+      // Import the paper using the ADS import
+      const result = await window.electronAPI.adsImportPapers([{ bibcode }]);
 
       if (result.imported?.length > 0) {
         // Reload papers and select the new one
@@ -1815,22 +2695,22 @@ class SciXReader {
 
   // Shared import method for refs/cites
   async importPapersFromBibcodes(papers, source) {
-    // Show the SciX modal for progress
-    this.showScixModal();
-    document.getElementById('scix-query-input').value = `Importing ${papers.length} ${source}...`;
-    document.getElementById('scix-search-execute-btn').disabled = true;
-    document.getElementById('scix-results-list').innerHTML = '<p class="no-content">Fetching paper metadata from ADS...</p>';
-    document.getElementById('scix-results-header').classList.add('hidden');
+    // Show the ADS search modal for progress
+    document.getElementById('ads-search-modal').classList.remove('hidden');
+    document.getElementById('ads-query-input').value = `Importing ${papers.length} ${source}...`;
+    document.getElementById('ads-search-execute-btn').disabled = true;
+    document.getElementById('ads-results-list').innerHTML = '<p class="no-content">Fetching paper metadata from ADS...</p>';
+    document.getElementById('ads-results-header').classList.add('hidden');
 
-    const progressEl = document.getElementById('scix-progress');
+    const progressEl = document.getElementById('ads-progress');
     progressEl.classList.remove('hidden');
 
     try {
-      const result = await window.electronAPI.importFromScix(papers);
+      const result = await window.electronAPI.adsImportPapers(papers);
       // Progress updates handled by onImportProgress listener
     } catch (error) {
       console.error('Import error:', error);
-      document.getElementById('scix-results-list').innerHTML =
+      document.getElementById('ads-results-list').innerHTML =
         `<p class="no-content" style="color: var(--error);">Import failed: ${error.message}</p>`;
     }
   }
@@ -2262,7 +3142,7 @@ class SciXReader {
       // Hide viewer, show placeholder
       document.getElementById('viewer-wrapper').classList.add('hidden');
       document.getElementById('detail-placeholder').classList.remove('hidden');
-      document.title = 'SciX Reader';
+      document.title = 'ADS Reader';
 
       // Reload papers list
       await this.loadPapers();
@@ -2366,7 +3246,7 @@ class SciXReader {
     // Reset state
     this.adsLookupSelectedDoc = null;
     titleEl.textContent = this.selectedPaper.title || 'Untitled';
-    resultsEl.innerHTML = '<div class="scix-empty-state"><p>Extracting metadata...</p></div>';
+    resultsEl.innerHTML = '<div class="ads-empty-state"><p>Extracting metadata...</p></div>';
 
     this.addConsoleMessage('Opening ADS lookup...', 'info');
 
@@ -2381,7 +3261,7 @@ class SciXReader {
       statusEl.classList.remove('hidden');
       statusText.textContent = 'Paper has DOI. Click Search to find in ADS.';
       this.addConsoleMessage(`Using DOI for search: ${doi}`, 'info');
-      resultsEl.innerHTML = '<div class="scix-empty-state"><p>Click Search to find matching papers in ADS</p></div>';
+      resultsEl.innerHTML = '<div class="ads-empty-state"><p>Click Search to find matching papers in ADS</p></div>';
       return;
     }
 
@@ -2450,7 +3330,7 @@ class SciXReader {
       statusText.textContent = 'Extraction failed. Using paper info.';
     }
 
-    resultsEl.innerHTML = '<div class="scix-empty-state"><p>Click Search to find matching papers in ADS</p></div>';
+    resultsEl.innerHTML = '<div class="ads-empty-state"><p>Click Search to find matching papers in ADS</p></div>';
   }
 
   buildAdsQueryFromPaper(queryInput) {
@@ -2633,10 +3513,10 @@ class SciXReader {
         this.renderAdsLookupResults(result.data.papers);
       } else if (result.error) {
         statusText.textContent = 'Search failed: ' + result.error;
-        resultsEl.innerHTML = '<div class="scix-empty-state"><p>Search error</p></div>';
+        resultsEl.innerHTML = '<div class="ads-empty-state"><p>Search error</p></div>';
       } else {
         statusText.textContent = 'No papers found. Try adjusting your search.';
-        resultsEl.innerHTML = '<div class="scix-empty-state"><p>No results found</p></div>';
+        resultsEl.innerHTML = '<div class="ads-empty-state"><p>No results found</p></div>';
       }
     } catch (err) {
       console.error('ADS lookup error:', err);
@@ -2648,15 +3528,15 @@ class SciXReader {
     const resultsEl = document.getElementById('ads-lookup-results');
 
     resultsEl.innerHTML = papers.map((paper, i) => `
-      <div class="scix-result-item" data-index="${i}">
-        <div class="scix-result-info">
-          <div class="scix-result-title">${this.escapeHtml(paper.title || 'Untitled')}</div>
-          <div class="scix-result-meta">
+      <div class="ads-result-item" data-index="${i}">
+        <div class="ads-result-info">
+          <div class="ads-result-title">${this.escapeHtml(paper.title || 'Untitled')}</div>
+          <div class="ads-result-meta">
             <span>${paper.authors?.[0] || 'Unknown'}</span>
             <span>${paper.year || ''}</span>
             <span>${paper.bibcode || ''}</span>
           </div>
-          ${paper.abstract ? `<div class="scix-result-abstract">${this.escapeHtml(paper.abstract.substring(0, 200))}...</div>` : ''}
+          ${paper.abstract ? `<div class="ads-result-abstract">${this.escapeHtml(paper.abstract.substring(0, 200))}...</div>` : ''}
         </div>
         <button class="ads-lookup-import-btn" data-index="${i}" title="Apply this metadata">+</button>
       </div>
@@ -3169,8 +4049,8 @@ class SciXReader {
     status.classList.toggle('connected', this.hasAdsToken);
   }
 
-  async showAdsModal() {
-    document.getElementById('ads-modal').classList.remove('hidden');
+  async showAdsTokenModal() {
+    document.getElementById('ads-token-modal').classList.remove('hidden');
     document.getElementById('ads-token-input').focus();
 
     // Load current ADS token
@@ -3182,8 +4062,8 @@ class SciXReader {
     document.getElementById('library-proxy-input').value = proxyUrl || '';
   }
 
-  hideAdsModal() {
-    document.getElementById('ads-modal').classList.add('hidden');
+  hideAdsTokenModal() {
+    document.getElementById('ads-token-modal').classList.add('hidden');
     document.getElementById('ads-token-input').value = '';
     document.getElementById('library-proxy-input').value = '';
     document.getElementById('ads-modal-status').textContent = '';
@@ -3356,174 +4236,174 @@ class SciXReader {
     await this.loadCollections();
   }
 
-  // SciX Search Modal
-  showScixModal() {
+  // ADS Search Modal
+  showAdsSearchModal() {
     if (!this.hasAdsToken) {
-      this.showAdsModal();
+      this.showAdsTokenModal();
       return;
     }
-    document.getElementById('scix-modal').classList.remove('hidden');
-    document.getElementById('scix-query-input').focus();
+    document.getElementById('ads-search-modal').classList.remove('hidden');
+    document.getElementById('ads-query-input').focus();
   }
 
-  hideScixModal() {
-    document.getElementById('scix-modal').classList.add('hidden');
-    document.getElementById('scix-query-input').value = '';
-    this.scixResults = [];
-    this.scixSelected.clear();
-    this.renderScixResults();
-    document.getElementById('scix-results-header').classList.add('hidden');
-    document.getElementById('scix-progress').classList.add('hidden');
+  hideAdsSearchModal() {
+    document.getElementById('ads-search-modal').classList.add('hidden');
+    document.getElementById('ads-query-input').value = '';
+    this.adsResults = [];
+    this.adsSelected.clear();
+    this.renderAdsResults();
+    document.getElementById('ads-results-header').classList.add('hidden');
+    document.getElementById('ads-progress').classList.add('hidden');
   }
 
-  async executeScixSearch() {
-    const query = document.getElementById('scix-query-input').value.trim();
+  async executeAdsSearch() {
+    const query = document.getElementById('ads-query-input').value.trim();
     if (!query) return;
 
-    const searchBtn = document.getElementById('scix-search-execute-btn');
+    const searchBtn = document.getElementById('ads-search-execute-btn');
     searchBtn.textContent = 'Searching...';
     searchBtn.disabled = true;
 
     try {
-      const result = await window.electronAPI.scixSearch(query, { rows: 1000 });
+      const result = await window.electronAPI.adsImportSearch(query, { rows: 1000 });
 
       if (result.success) {
-        this.scixResults = result.data.papers;
-        this.scixSelected.clear();
-        document.getElementById('scix-results-count').textContent =
+        this.adsResults = result.data.papers;
+        this.adsSelected.clear();
+        document.getElementById('ads-results-count').textContent =
           `${result.data.numFound} papers found${result.data.numFound > 1000 ? ' (showing first 1000)' : ''}`;
-        document.getElementById('scix-results-header').classList.remove('hidden');
-        this.renderScixResults();
+        document.getElementById('ads-results-header').classList.remove('hidden');
+        this.renderAdsResults();
       } else {
-        this.showScixError(result.error);
+        this.showAdsError(result.error);
       }
     } catch (error) {
-      this.showScixError(error.message);
+      this.showAdsError(error.message);
     } finally {
       searchBtn.textContent = 'Search';
       searchBtn.disabled = false;
     }
   }
 
-  renderScixResults() {
-    const listEl = document.getElementById('scix-results-list');
+  renderAdsResults() {
+    const listEl = document.getElementById('ads-results-list');
 
-    if (this.scixResults.length === 0) {
+    if (this.adsResults.length === 0) {
       listEl.innerHTML = `
-        <div class="scix-empty-state">
-          <p>Enter a search query to find papers in SciX/NASA ADS</p>
+        <div class="ads-empty-state">
+          <p>Enter a search query to find papers in NASA ADS</p>
         </div>
       `;
-      this.updateScixSelectedCount();
+      this.updateAdsSelectedCount();
       return;
     }
 
-    listEl.innerHTML = this.scixResults.map((paper, index) => {
+    listEl.innerHTML = this.adsResults.map((paper, index) => {
       const authorsList = paper.authors || [];
       const authorsDisplay = this.formatAuthorsForList(authorsList);
       const hasArxiv = !!paper.arxiv_id;
       const isInLibrary = paper.inLibrary;
-      const isSelected = this.scixSelected.has(index);
+      const isSelected = this.adsSelected.has(index);
       const abstractPreview = paper.abstract
         ? paper.abstract.substring(0, 200) + (paper.abstract.length > 200 ? '...' : '')
         : null;
 
       return `
-        <div class="scix-result-item${isSelected ? ' selected' : ''}${isInLibrary ? ' in-library' : ''}" data-index="${index}">
-          <input type="checkbox" class="scix-result-checkbox"
+        <div class="ads-result-item${isSelected ? ' selected' : ''}${isInLibrary ? ' in-library' : ''}" data-index="${index}">
+          <input type="checkbox" class="ads-result-checkbox"
             ${isSelected ? 'checked' : ''} ${isInLibrary ? 'disabled' : ''}>
-          <div class="scix-result-content">
-            <div class="scix-result-title">${this.escapeHtml(paper.title)}</div>
-            <div class="scix-result-authors">${this.escapeHtml(authorsDisplay)}</div>
-            <div class="scix-result-meta">
+          <div class="ads-result-content">
+            <div class="ads-result-title">${this.escapeHtml(paper.title)}</div>
+            <div class="ads-result-authors">${this.escapeHtml(authorsDisplay)}</div>
+            <div class="ads-result-meta">
               <span>${paper.year || ''}</span>
-              ${paper.journal ? `<span class="scix-result-journal">${this.escapeHtml(paper.journal)}</span>` : ''}
+              ${paper.journal ? `<span class="ads-result-journal">${this.escapeHtml(paper.journal)}</span>` : ''}
               ${paper.bibcode ? `<span>${paper.bibcode}</span>` : ''}
             </div>
-            ${abstractPreview ? `<div class="scix-result-abstract">${this.escapeHtml(abstractPreview)}</div>` : ''}
+            ${abstractPreview ? `<div class="ads-result-abstract">${this.escapeHtml(abstractPreview)}</div>` : ''}
           </div>
-          ${isInLibrary ? '<span class="scix-result-status in-library">In Library</span>' : ''}
-          ${!isInLibrary && !hasArxiv ? '<span class="scix-result-status no-pdf">No arXiv</span>' : ''}
+          ${isInLibrary ? '<span class="ads-result-status in-library">In Library</span>' : ''}
+          ${!isInLibrary && !hasArxiv ? '<span class="ads-result-status no-pdf">No arXiv</span>' : ''}
         </div>
       `;
     }).join('');
 
     // Add click handlers
-    listEl.querySelectorAll('.scix-result-item').forEach(item => {
+    listEl.querySelectorAll('.ads-result-item').forEach(item => {
       const index = parseInt(item.dataset.index);
-      const paper = this.scixResults[index];
+      const paper = this.adsResults[index];
 
       if (!paper.inLibrary) {
         item.addEventListener('click', (e) => {
           if (e.target.type !== 'checkbox') {
-            this.toggleScixSelection(index);
+            this.toggleAdsSelection(index);
           }
         });
 
-        const checkbox = item.querySelector('.scix-result-checkbox');
+        const checkbox = item.querySelector('.ads-result-checkbox');
         checkbox.addEventListener('change', () => {
-          this.toggleScixSelection(index);
+          this.toggleAdsSelection(index);
         });
       }
     });
 
-    this.updateScixSelectedCount();
+    this.updateAdsSelectedCount();
   }
 
-  toggleScixSelection(index) {
-    if (this.scixSelected.has(index)) {
-      this.scixSelected.delete(index);
+  toggleAdsSelection(index) {
+    if (this.adsSelected.has(index)) {
+      this.adsSelected.delete(index);
     } else {
-      this.scixSelected.add(index);
+      this.adsSelected.add(index);
     }
-    this.renderScixResults();
+    this.renderAdsResults();
   }
 
-  scixSelectAll() {
-    this.scixResults.forEach((paper, index) => {
+  adsSelectAll() {
+    this.adsResults.forEach((paper, index) => {
       if (!paper.inLibrary) {
-        this.scixSelected.add(index);
+        this.adsSelected.add(index);
       }
     });
-    this.renderScixResults();
+    this.renderAdsResults();
   }
 
-  scixSelectNone() {
-    this.scixSelected.clear();
-    this.renderScixResults();
+  adsSelectNone() {
+    this.adsSelected.clear();
+    this.renderAdsResults();
   }
 
-  updateScixSelectedCount() {
-    const count = this.scixSelected.size;
-    document.getElementById('scix-selected-count').textContent = `${count} selected`;
-    document.getElementById('scix-import-btn').disabled = count === 0;
+  updateAdsSelectedCount() {
+    const count = this.adsSelected.size;
+    document.getElementById('ads-selected-count').textContent = `${count} selected`;
+    document.getElementById('ads-import-btn').disabled = count === 0;
   }
 
-  async importScixSelected() {
-    if (this.scixSelected.size === 0) return;
+  async importAdsSelected() {
+    if (this.adsSelected.size === 0) return;
 
-    const selectedPapers = Array.from(this.scixSelected).map(index => this.scixResults[index]);
+    const selectedPapers = Array.from(this.adsSelected).map(index => this.adsResults[index]);
 
     // Show progress
-    document.getElementById('scix-progress').classList.remove('hidden');
-    document.getElementById('scix-progress-fill').style.width = '0%';
-    document.getElementById('scix-progress-text').textContent = 'Starting import...';
-    document.getElementById('scix-import-btn').disabled = true;
+    document.getElementById('ads-progress').classList.remove('hidden');
+    document.getElementById('ads-progress-fill').style.width = '0%';
+    document.getElementById('ads-progress-text').textContent = 'Starting import...';
+    document.getElementById('ads-import-btn').disabled = true;
 
     try {
-      await window.electronAPI.importFromScix(selectedPapers);
+      await window.electronAPI.adsImportPapers(selectedPapers);
       // Completion handled by onImportComplete callback
     } catch (error) {
-      this.showScixError(error.message);
-      document.getElementById('scix-progress').classList.add('hidden');
-      document.getElementById('scix-import-btn').disabled = false;
+      this.showAdsError(error.message);
+      document.getElementById('ads-progress').classList.add('hidden');
+      document.getElementById('ads-import-btn').disabled = false;
     }
   }
 
   updateImportProgress(data) {
     const percent = (data.current / data.total) * 100;
-    document.getElementById('scix-progress-fill').style.width = `${percent}%`;
-    document.getElementById('scix-progress-text').textContent =
+    document.getElementById('ads-progress-fill').style.width = `${percent}%`;
+    document.getElementById('ads-progress-text').textContent =
       `Importing ${data.current} of ${data.total}: ${data.paper?.substring(0, 50) || ''}...`;
   }
 
@@ -3532,8 +4412,8 @@ class SciXReader {
     const skipped = results.skipped?.length || 0;
     const failed = results.failed?.length || 0;
 
-    document.getElementById('scix-progress-fill').style.width = '100%';
-    document.getElementById('scix-progress-text').textContent =
+    document.getElementById('ads-progress-fill').style.width = '100%';
+    document.getElementById('ads-progress-text').textContent =
       `Done! Imported: ${imported}, Skipped: ${skipped}, Failed: ${failed}`;
 
     // Reload papers list
@@ -3543,14 +4423,14 @@ class SciXReader {
 
     // Close modal after a delay
     setTimeout(() => {
-      this.hideScixModal();
+      this.hideAdsModal();
     }, 2000);
   }
 
-  showScixError(message) {
-    const listEl = document.getElementById('scix-results-list');
+  showAdsError(message) {
+    const listEl = document.getElementById('ads-results-list');
     listEl.innerHTML = `
-      <div class="scix-empty-state">
+      <div class="ads-empty-state">
         <p style="color: var(--error)">Error: ${this.escapeHtml(message)}</p>
       </div>
     `;
@@ -4800,5 +5680,5 @@ class SciXReader {
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
-  window.app = new SciXReader();
+  window.app = new ADSReader();
 });

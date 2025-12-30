@@ -1,8 +1,8 @@
-# SciX Reader iOS App - Implementation Plan
+# ADS Reader iOS App - Implementation Plan
 
 ## Overview
 
-This document outlines the strategy and step-by-step implementation plan for creating an iOS version of SciX Reader using Capacitor. A fresh Claude Code session can follow this plan to execute the migration.
+This document outlines the strategy and step-by-step implementation plan for creating an iOS version of ADS Reader using Capacitor. A fresh Claude Code session can follow this plan to execute the migration.
 
 **Approach**: Capacitor (wraps existing web app in native iOS shell)
 **Estimated effort**: 2-3 weeks
@@ -25,7 +25,7 @@ This document outlines the strategy and step-by-step implementation plan for cre
 
 ### Current (Electron)
 ```
-scix-reader/
+ads-reader/
 ├── main.js                    # Electron main process
 ├── preload.js                 # IPC bridge
 ├── src/
@@ -44,7 +44,7 @@ scix-reader/
 
 ### Target (Electron + Capacitor)
 ```
-scix-reader/
+ads-reader/
 ├── main.js                    # Electron main process (unchanged)
 ├── preload.js                 # IPC bridge (unchanged)
 ├── src/
@@ -69,7 +69,7 @@ scix-reader/
 npm install @capacitor/core @capacitor/cli
 
 # Initialize Capacitor in the project
-npx cap init "SciX Reader" "com.scixreader.app" --web-dir=src/renderer
+npx cap init "ADS Reader" "com.adsreader.app" --web-dir=src/renderer
 
 # Add iOS platform
 npm install @capacitor/ios
@@ -84,8 +84,8 @@ Create `capacitor.config.ts`:
 import { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'com.scixreader.app',
-  appName: 'SciX Reader',
+  appId: 'com.adsreader.app',
+  appName: 'ADS Reader',
   webDir: 'src/renderer',
   server: {
     // For development, can connect to local server

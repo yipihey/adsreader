@@ -1,4 +1,4 @@
-// SciX Reader - Database Module (sql.js)
+// ADS Reader - Database Module (sql.js)
 // SQLite database using sql.js (in-memory with periodic saves to disk)
 
 const initSqlJs = require('sql.js');

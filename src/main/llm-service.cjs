@@ -1,4 +1,4 @@
-// SciX Reader - LLM Service Module (Ollama Integration)
+// ADS Reader - LLM Service Module (Ollama Integration)
 
 const http = require('http');
 const https = require('https');

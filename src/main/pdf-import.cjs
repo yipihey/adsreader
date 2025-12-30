@@ -1,4 +1,4 @@
-// SciX Reader - PDF Import Module
+// ADS Reader - PDF Import Module
 
 const fs = require('fs');
 const path = require('path');
@@ -432,7 +432,7 @@ async function importPDF(sourcePath, libraryPath) {
     text_path: `text/${textFilename}`,
     title: extractedTitle,
     textExtracted,
-    // Include extracted metadata for SciX search fallback
+    // Include extracted metadata for ADS search fallback
     extractedMetadata: {
       title: pdfMetadata.title,
       firstAuthor: pdfMetadata.firstAuthor,

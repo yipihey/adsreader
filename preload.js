@@ -88,8 +88,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   adsGetEsources: (bibcode) => ipcRenderer.invoke('ads-get-esources', bibcode),
   downloadPdfFromSource: (paperId, sourceType) => ipcRenderer.invoke('download-pdf-from-source', paperId, sourceType),
   checkPdfExists: (paperId, sourceType) => ipcRenderer.invoke('check-pdf-exists', paperId, sourceType),
-  adsFetchMetadata: (paperId) => ipcRenderer.invoke('ads-fetch-metadata', paperId),
   adsSyncPapers: (paperIds) => ipcRenderer.invoke('ads-sync-papers', paperIds),
+  adsCancelSync: () => ipcRenderer.invoke('ads-cancel-sync'),
   onAdsSyncProgress: (callback) => ipcRenderer.on('ads-sync-progress', (event, data) => callback(data)),
   removeAdsSyncListeners: () => ipcRenderer.removeAllListeners('ads-sync-progress'),
 

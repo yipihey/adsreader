@@ -109,6 +109,7 @@ class ADSReader {
         await this.loadPapers();
         await this.loadCollections();
         await this.checkAdsToken();
+        await this.checkProxyStatus();
         await this.checkLlmConnection();
 
         // Check for sync conflicts (iCloud)
@@ -854,10 +855,18 @@ class ADSReader {
       }, { passive: false });
     }
 
+    // Settings section toggle
+    document.getElementById('settings-header')?.addEventListener('click', () => this.toggleSettings());
+
     // ADS settings
     document.getElementById('ads-settings-btn')?.addEventListener('click', () => this.showAdsTokenModal());
     document.getElementById('ads-cancel-btn')?.addEventListener('click', () => this.hideAdsTokenModal());
     document.getElementById('ads-save-btn')?.addEventListener('click', () => this.saveAdsToken());
+
+    // Library Proxy settings
+    document.getElementById('library-proxy-btn')?.addEventListener('click', () => this.showLibraryProxyModal());
+    document.getElementById('proxy-cancel-btn')?.addEventListener('click', () => this.hideLibraryProxyModal());
+    document.getElementById('proxy-save-btn')?.addEventListener('click', () => this.saveLibraryProxy());
 
     // Preferences
     document.getElementById('preferences-btn')?.addEventListener('click', () => this.showPreferencesModal());
@@ -925,6 +934,7 @@ class ADSReader {
     document.getElementById('ads-sync-btn')?.addEventListener('click', () => this.startAdsSync());
     document.getElementById('sync-close-btn')?.addEventListener('click', () => this.hideAdsSyncModal());
     document.getElementById('ads-sync-close-btn')?.addEventListener('click', () => this.hideAdsSyncModal());
+    document.getElementById('sync-cancel-btn')?.addEventListener('click', () => this.cancelAdsSync());
 
     // ADS lookup shortcut buttons
     document.querySelectorAll('#ads-lookup-modal .ads-shortcut-btn').forEach(btn => {
@@ -1194,8 +1204,19 @@ class ADSReader {
         localStorage.setItem('sortOrder', this.sortOrder);
         this.sortPapers();
         this.renderPaperList();
+        this.scrollToSelectedPaper();
       });
     });
+  }
+
+  scrollToSelectedPaper() {
+    // Scroll to keep selected paper visible (centered)
+    if (this.selectedPaper) {
+      const paperItem = document.querySelector(`.paper-item[data-id="${this.selectedPaper.id}"]`);
+      if (paperItem) {
+        paperItem.scrollIntoView({ behavior: 'auto', block: 'center' });
+      }
+    }
   }
 
   sortPapers() {
@@ -1235,6 +1256,10 @@ class ADSReader {
         case 'citations':
           valA = a.citation_count || 0;
           valB = b.citation_count || 0;
+          break;
+        case 'bibcode':
+          valA = (a.bibcode || '').toLowerCase();
+          valB = (b.bibcode || '').toLowerCase();
           break;
         default:
           return 0;
@@ -1461,6 +1486,7 @@ class ADSReader {
           this.loadPapers();
           this.loadCollections();
           this.checkAdsToken();
+          this.checkProxyStatus();
         }, 300);
       }
     }
@@ -2097,7 +2123,7 @@ class ADSReader {
     if (paper.abstract) {
       abstractEl.innerHTML = `<p>${this.escapeHtml(paper.abstract)}</p>`;
     } else {
-      abstractEl.innerHTML = '<p class="no-content">No abstract available. Click "Fetch from ADS" to retrieve metadata.</p>';
+      abstractEl.innerHTML = '<p class="no-content">No abstract available. Click "Sync" to retrieve metadata from ADS.</p>';
     }
 
     // Update keywords
@@ -2430,7 +2456,7 @@ class ADSReader {
     this.selectedRefs.clear();
 
     if (refs.length === 0) {
-      refsEl.innerHTML = '<p class="no-content">No references loaded. Click "Fetch from ADS" to retrieve.</p>';
+      refsEl.innerHTML = '<p class="no-content">No references loaded. Click "Sync" to retrieve from ADS.</p>';
       toolbar.classList.add('hidden');
       return;
     }
@@ -2501,7 +2527,7 @@ class ADSReader {
     this.selectedCites.clear();
 
     if (cites.length === 0) {
-      citesEl.innerHTML = '<p class="no-content">No citations loaded. Click "Fetch from ADS" to retrieve.</p>';
+      citesEl.innerHTML = '<p class="no-content">No citations loaded. Click "Sync" to retrieve from ADS.</p>';
       toolbar.classList.add('hidden');
       return;
     }
@@ -3408,13 +3434,31 @@ class ADSReader {
     const statusEl = document.getElementById('sync-status');
     const progressEl = document.getElementById('sync-progress-fill');
     const paperEl = document.getElementById('sync-current-paper');
-    const footerEl = document.getElementById('sync-footer');
+    const timerEl = document.getElementById('sync-timer');
 
     const paperCount = paperIds.length;
     statusEl.textContent = `Starting sync of ${paperCount} paper${paperCount > 1 ? 's' : ''}...`;
     progressEl.style.width = '0%';
     paperEl.textContent = '';
-    footerEl.style.display = 'none';
+
+    // Reset button states - show cancel, hide close
+    document.getElementById('sync-cancel-btn').classList.remove('hidden');
+    document.getElementById('sync-cancel-btn').disabled = false;
+    document.getElementById('sync-cancel-btn').textContent = 'Cancel';
+    document.getElementById('sync-close-btn').classList.add('hidden');
+
+    // Start timer
+    const startTime = Date.now();
+    timerEl.textContent = '0:00';
+    const formatTime = (ms) => {
+      const seconds = Math.floor(ms / 1000);
+      const mins = Math.floor(seconds / 60);
+      const secs = seconds % 60;
+      return `${mins}:${secs.toString().padStart(2, '0')}`;
+    };
+    const timerInterval = setInterval(() => {
+      timerEl.textContent = formatTime(Date.now() - startTime);
+    }, 1000);
 
     // Add spinning animation to button
     const syncBtn = document.getElementById('ads-sync-btn');
@@ -3422,18 +3466,36 @@ class ADSReader {
     syncBtn.disabled = true;
 
     // Set up progress listener
+    const cancelBtn = document.getElementById('sync-cancel-btn');
+    const closeBtn = document.getElementById('sync-close-btn');
     window.electronAPI.onAdsSyncProgress((data) => {
       console.log('Sync progress event:', data);
       if (data.done) {
-        // Sync complete
+        // Stop timer
+        clearInterval(timerInterval);
+        const elapsed = formatTime(Date.now() - startTime);
+        timerEl.textContent = data.cancelled ? `Cancelled after ${elapsed}` : `Completed in ${elapsed}`;
+
+        // Sync complete or cancelled
         const r = data.results;
-        statusEl.textContent = `✓ Sync complete! Updated ${r.updated}, skipped ${r.skipped}, failed ${r.failed}`;
+        if (data.cancelled) {
+          statusEl.textContent = `⚠ Sync cancelled. Updated ${r.updated}, skipped ${r.skipped}, failed ${r.failed}`;
+          progressEl.style.backgroundColor = '#f0ad4e';
+        } else {
+          statusEl.textContent = `✓ Sync complete! Updated ${r.updated}, skipped ${r.skipped}, failed ${r.failed}`;
+          progressEl.style.backgroundColor = '#28a745';
+        }
         progressEl.style.width = '100%';
-        progressEl.style.backgroundColor = '#28a745';
         paperEl.textContent = '';
 
         syncBtn.classList.remove('syncing');
         syncBtn.disabled = false;
+
+        // Show close button, hide cancel button
+        cancelBtn.classList.add('hidden');
+        cancelBtn.disabled = false;
+        cancelBtn.textContent = 'Cancel';
+        closeBtn.classList.remove('hidden');
 
         // Reload papers and refresh view
         const selectedPaperId = this.selectedPaper?.id;
@@ -3457,12 +3519,12 @@ class ADSReader {
           }
         })();
 
-        // Auto-close after 2 seconds
+        // Auto-close after 2 seconds (3 seconds if cancelled to show the message)
         setTimeout(() => {
           console.log('Auto-closing sync modal');
           this.hideAdsSyncModal();
           progressEl.style.backgroundColor = '';
-        }, 2000);
+        }, data.cancelled ? 3000 : 2000);
       } else {
         // Progress update
         const percent = Math.round((data.current / data.total) * 100);
@@ -3476,8 +3538,11 @@ class ADSReader {
     try {
       await window.electronAPI.adsSyncPapers(paperIds);
     } catch (error) {
+      clearInterval(timerInterval);
       statusEl.textContent = `Sync failed: ${error.message}`;
-      footerEl.style.display = 'flex';
+      // Show close button on error
+      cancelBtn.classList.add('hidden');
+      closeBtn.classList.remove('hidden');
       syncBtn.classList.remove('syncing');
       syncBtn.disabled = false;
       // Clean up listener on error
@@ -3490,6 +3555,17 @@ class ADSReader {
     document.getElementById('ads-sync-modal').classList.add('hidden');
     // Clean up listener when modal is closed (manually or auto)
     window.electronAPI.removeAdsSyncListeners();
+    // Reset button states
+    document.getElementById('sync-cancel-btn')?.classList.remove('hidden');
+    document.getElementById('sync-close-btn')?.classList.add('hidden');
+  }
+
+  async cancelAdsSync() {
+    const cancelBtn = document.getElementById('sync-cancel-btn');
+    cancelBtn.disabled = true;
+    cancelBtn.textContent = 'Cancelling...';
+    await window.electronAPI.adsCancelSync();
+    // The progress handler will handle the UI updates when done event arrives
   }
 
   async searchAdsLookup() {
@@ -4040,6 +4116,14 @@ class ADSReader {
     this.selectPaper(this.papers[prevIndex].id);
   }
 
+  // Settings section toggle
+  toggleSettings() {
+    const header = document.getElementById('settings-header');
+    const items = document.getElementById('settings-items');
+    header.classList.toggle('collapsed');
+    items.classList.toggle('collapsed');
+  }
+
   // ADS Token Modal
   async checkAdsToken() {
     const token = await window.electronAPI.getAdsToken();
@@ -4049,6 +4133,12 @@ class ADSReader {
     status.classList.toggle('connected', this.hasAdsToken);
   }
 
+  async checkProxyStatus() {
+    const proxyUrl = await window.electronAPI.getLibraryProxy();
+    const status = document.getElementById('proxy-status');
+    status.classList.toggle('connected', !!proxyUrl);
+  }
+
   async showAdsTokenModal() {
     document.getElementById('ads-token-modal').classList.remove('hidden');
     document.getElementById('ads-token-input').focus();
@@ -4056,57 +4146,69 @@ class ADSReader {
     // Load current ADS token
     const token = await window.electronAPI.getAdsToken();
     document.getElementById('ads-token-input').value = token || '';
-
-    // Load current library proxy URL
-    const proxyUrl = await window.electronAPI.getLibraryProxy();
-    document.getElementById('library-proxy-input').value = proxyUrl || '';
   }
 
   hideAdsTokenModal() {
     document.getElementById('ads-token-modal').classList.add('hidden');
     document.getElementById('ads-token-input').value = '';
-    document.getElementById('library-proxy-input').value = '';
     document.getElementById('ads-modal-status').textContent = '';
   }
 
   async saveAdsToken() {
     const token = document.getElementById('ads-token-input').value.trim();
-    const proxyUrl = document.getElementById('library-proxy-input').value.trim();
     const statusEl = document.getElementById('ads-modal-status');
 
-    // Token is required only if not already set
-    if (!token && !this.hasAdsToken) {
+    if (!token) {
       statusEl.className = 'modal-status error';
       statusEl.textContent = 'Please enter a token';
       return;
     }
 
     statusEl.className = 'modal-status';
+    statusEl.textContent = 'Validating...';
+
+    const result = await window.electronAPI.setAdsToken(token);
+
+    if (result.success) {
+      this.hasAdsToken = true;
+      document.getElementById('ads-status').classList.add('connected');
+      statusEl.className = 'modal-status success';
+      statusEl.textContent = 'Token saved successfully!';
+      setTimeout(() => this.hideAdsTokenModal(), 1000);
+    } else {
+      statusEl.className = 'modal-status error';
+      statusEl.textContent = `Invalid token: ${result.error}`;
+    }
+  }
+
+  // Library Proxy Modal
+  async showLibraryProxyModal() {
+    document.getElementById('library-proxy-modal').classList.remove('hidden');
+    document.getElementById('library-proxy-input').focus();
+
+    const proxyUrl = await window.electronAPI.getLibraryProxy();
+    document.getElementById('library-proxy-input').value = proxyUrl || '';
+  }
+
+  hideLibraryProxyModal() {
+    document.getElementById('library-proxy-modal').classList.add('hidden');
+    document.getElementById('library-proxy-input').value = '';
+    document.getElementById('proxy-modal-status').textContent = '';
+  }
+
+  async saveLibraryProxy() {
+    const proxyUrl = document.getElementById('library-proxy-input').value.trim();
+    const statusEl = document.getElementById('proxy-modal-status');
+
+    statusEl.className = 'modal-status';
     statusEl.textContent = 'Saving...';
 
-    // Save library proxy (always)
     await window.electronAPI.setLibraryProxy(proxyUrl);
 
-    // Save ADS token if provided
-    if (token) {
-      const result = await window.electronAPI.setAdsToken(token);
-
-      if (result.success) {
-        this.hasAdsToken = true;
-        document.getElementById('ads-status').classList.add('connected');
-        statusEl.className = 'modal-status success';
-        statusEl.textContent = 'Settings saved successfully!';
-        setTimeout(() => this.hideAdsModal(), 1000);
-      } else {
-        statusEl.className = 'modal-status error';
-        statusEl.textContent = `Invalid token: ${result.error}`;
-      }
-    } else {
-      // Just saved proxy, no token change
-      statusEl.className = 'modal-status success';
-      statusEl.textContent = 'Settings saved successfully!';
-      setTimeout(() => this.hideAdsModal(), 1000);
-    }
+    document.getElementById('proxy-status').classList.toggle('connected', !!proxyUrl);
+    statusEl.className = 'modal-status success';
+    statusEl.textContent = proxyUrl ? 'Proxy saved!' : 'Proxy cleared!';
+    setTimeout(() => this.hideLibraryProxyModal(), 1000);
   }
 
   // Preferences Modal
@@ -4423,7 +4525,7 @@ class ADSReader {
 
     // Close modal after a delay
     setTimeout(() => {
-      this.hideAdsModal();
+      this.hideAdsSearchModal();
     }, 2000);
   }
 

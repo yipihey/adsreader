@@ -1684,42 +1684,21 @@ ipcMain.handle('download-pdf-from-source', async (event, paperId, sourceType) =>
   }
 });
 
-ipcMain.handle('ads-fetch-metadata', async (event, paperId) => {
-  const token = store.get('adsToken');
-  if (!token) return { success: false, error: 'No ADS API token configured' };
-  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+// Sync cancellation flag
+let syncCancelled = false;
 
-  // Use the comprehensive fetchAndApplyAdsMetadata helper which includes
-  // fallback search by title/author if identifiers don't work
-  const result = await fetchAndApplyAdsMetadata(paperId);
-
-  if (!result.success) {
-    return { success: false, error: result.reason || 'Paper not found in ADS' };
-  }
-
-  // Get updated paper with refs/cites counts
-  const paper = database.getPaper(paperId);
-  const refs = database.getReferences(paperId);
-  const cits = database.getCitations(paperId);
-
-  // Update master.bib
-  const libraryPath = store.get('libraryPath');
-  const allPapers = database.getAllPapers();
-  bibtex.updateMasterBib(libraryPath, allPapers);
-
-  return {
-    success: true,
-    data: {
-      ...result.metadata,
-      bibtex: paper.bibtex,
-      referencesCount: refs.length,
-      citationsCount: cits.length
-    }
-  };
+// Cancel sync handler
+ipcMain.handle('ads-cancel-sync', () => {
+  syncCancelled = true;
+  sendConsoleLog('Sync cancelled by user', 'warn');
+  return { success: true };
 });
 
 // Sync selected papers with ADS - optimized bulk sync with parallel processing
 ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
+  // Reset cancel flag at start
+  syncCancelled = false;
+
   const token = store.get('adsToken');
   if (!token) return { success: false, error: 'No ADS API token configured' };
   if (!dbInitialized) return { success: false, error: 'Database not initialized' };
@@ -1900,6 +1879,11 @@ ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
     sendConsoleLog(`Processing ${papersWithBibcode.length} papers (${CONCURRENCY} at a time)...`, 'info');
 
     for (let i = 0; i < papersWithBibcode.length; i += CONCURRENCY) {
+      // Check for cancellation
+      if (syncCancelled) {
+        sendConsoleLog('Sync cancelled', 'warn');
+        break;
+      }
       const batch = papersWithBibcode.slice(i, i + CONCURRENCY);
       const batchNum = Math.floor(i / CONCURRENCY) + 1;
       const totalBatches = Math.ceil(papersWithBibcode.length / CONCURRENCY);
@@ -1964,6 +1948,11 @@ ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
 
   // Process papers without bibcode (need individual lookup by DOI/arXiv)
   for (let i = 0; i < papersWithoutBibcode.length; i++) {
+    // Check for cancellation
+    if (syncCancelled) {
+      sendConsoleLog('Sync cancelled', 'warn');
+      break;
+    }
     const paper = papersWithoutBibcode[i];
     sendConsoleLog(`Syncing: "${paper.title?.substring(0, 40)}..." (doi=${paper.doi || 'none'}, arxiv=${paper.arxiv_id || 'none'})`, 'info');
 
@@ -1976,9 +1965,19 @@ ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
     try {
       let adsData = null;
       if (paper.doi) {
-        adsData = await adsApi.getByDOI(token, paper.doi);
+        // Clean DOI - remove common garbage suffixes and prefixes
+        let cleanDoi = paper.doi
+          .replace(/^https?:\/\/doi\.org\//i, '')
+          .replace(/^doi:/i, '')
+          .replace(/\/CITE\/REFWORKS$/i, '')
+          .replace(/\/abstract$/i, '')
+          .replace(/\/full$/i, '')
+          .replace(/\/pdf$/i, '')
+          .trim();
+        sendConsoleLog(`Trying DOI: ${cleanDoi}`, 'info');
+        adsData = await adsApi.getByDOI(token, cleanDoi);
         if (adsData) {
-          sendConsoleLog(`Found via DOI: ${paper.doi}`, 'success');
+          sendConsoleLog(`Found via DOI: ${cleanDoi}`, 'success');
         }
       }
       if (!adsData && paper.arxiv_id) {
@@ -1988,8 +1987,46 @@ ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
         }
       }
 
+      // Fallback to smart search if DOI/arXiv lookup failed
+      if (!adsData && paper.title) {
+        let firstAuthor = null;
+        if (paper.authors && paper.authors.length > 0) {
+          const authorStr = paper.authors[0];
+          if (authorStr.includes(',')) {
+            firstAuthor = authorStr.split(',')[0].trim();
+          } else {
+            const parts = authorStr.trim().split(/\s+/);
+            if (parts.length > 0) {
+              firstAuthor = parts[parts.length - 1];
+            }
+          }
+        }
+        sendConsoleLog(`Trying smart search for "${paper.title?.substring(0, 30)}..."`, 'info');
+        adsData = await adsApi.smartSearch(token, {
+          title: paper.title,
+          firstAuthor: firstAuthor,
+          year: paper.year,
+          journal: paper.journal
+        });
+        if (adsData) {
+          sendConsoleLog(`Found via smart search: ${adsData.bibcode}`, 'success');
+        }
+      }
+
       if (!adsData) {
         sendConsoleLog(`Not found on ADS, skipping`, 'warn');
+        results.skipped++;
+        continue;
+      }
+
+      // Check if another paper already has this bibcode (duplicate detection)
+      const existingPaper = database.getPaperByBibcode(adsData.bibcode);
+      if (existingPaper && existingPaper.id !== paper.id) {
+        sendConsoleLog(`DUPLICATE: This paper already exists in your library!`, 'warn');
+        sendConsoleLog(`  Current: "${paper.title?.substring(0, 50)}..." (ID: ${paper.id})`, 'info');
+        sendConsoleLog(`  Existing: "${existingPaper.title?.substring(0, 50)}..." (ID: ${existingPaper.id})`, 'info');
+        sendConsoleLog(`  Bibcode: ${adsData.bibcode}`, 'info');
+        sendConsoleLog(`  Consider deleting the duplicate entry.`, 'info');
         results.skipped++;
         continue;
       }
@@ -2002,10 +2039,206 @@ ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
         results.updated++;
       } else {
         results.failed++;
+        results.errors.push({ paper: paper.title, error: result.error });
       }
     } catch (error) {
+      sendConsoleLog(`Error syncing "${paper.title?.substring(0, 30)}...": ${error.message}`, 'error');
+      console.error('Full sync error:', error);
       results.failed++;
       results.errors.push({ paper: paper.title, error: error.message });
+    }
+  }
+
+  // Process papers with no identifier using advanced lookup strategies
+  if (papersNoIdentifier.length > 0) {
+    sendConsoleLog(`Trying advanced lookup for ${papersNoIdentifier.length} papers without identifiers...`, 'info');
+
+    for (let i = 0; i < papersNoIdentifier.length; i++) {
+      // Check for cancellation
+      if (syncCancelled) {
+        sendConsoleLog('Sync cancelled', 'warn');
+        break;
+      }
+      const paper = papersNoIdentifier[i];
+      const shortTitle = paper.title?.substring(0, 40) || 'Untitled';
+
+      mainWindow.webContents.send('ads-sync-progress', {
+        current: papersWithBibcode.length + papersWithoutBibcode.length + i + 1,
+        total: papersToSync.length,
+        paper: `Lookup: ${shortTitle}...`
+      });
+
+      try {
+        let adsData = null;
+
+        // Strategy 1: Try to extract bibcode from adsurl in bibtex
+        if (paper.bibtex) {
+          const adsUrlMatch = paper.bibtex.match(/adsurl\s*=\s*\{([^}]+)\}/i);
+          if (adsUrlMatch) {
+            const adsUrl = adsUrlMatch[1];
+            const absMatch = adsUrl.match(/\/abs\/([^\/\s&?]+)/);
+            if (absMatch) {
+              const bibcodeFromUrl = absMatch[1];
+              sendConsoleLog(`[${shortTitle}] Trying bibcode from adsurl: ${bibcodeFromUrl}`, 'info');
+              adsData = await adsApi.getByBibcode(token, bibcodeFromUrl);
+              if (adsData) {
+                database.updatePaper(paper.id, { bibcode: bibcodeFromUrl }, false);
+              }
+            }
+          }
+        }
+
+        // Strategy 2: Try to extract identifiers from PDF text content
+        if (!adsData && paper.text_path && libraryPath) {
+          const textFile = path.join(libraryPath, paper.text_path);
+          if (fs.existsSync(textFile)) {
+            sendConsoleLog(`[${shortTitle}] Extracting identifiers from PDF...`, 'info');
+            const textContent = fs.readFileSync(textFile, 'utf-8');
+            const contentIds = pdfImport.extractIdentifiersFromContent(textContent);
+
+            if (contentIds.doi) {
+              // Clean DOI
+              let cleanDoi = contentIds.doi
+                .replace(/\/CITE\/REFWORKS$/i, '')
+                .replace(/\/abstract$/i, '')
+                .replace(/\/full$/i, '')
+                .replace(/\/pdf$/i, '')
+                .trim();
+              sendConsoleLog(`[${shortTitle}] Trying extracted DOI: ${cleanDoi}`, 'info');
+              adsData = await adsApi.getByDOI(token, cleanDoi);
+              if (adsData) {
+                database.updatePaper(paper.id, { doi: cleanDoi }, false);
+              }
+            }
+            if (!adsData && contentIds.arxiv_id) {
+              sendConsoleLog(`[${shortTitle}] Trying extracted arXiv: ${contentIds.arxiv_id}`, 'info');
+              adsData = await adsApi.getByArxiv(token, contentIds.arxiv_id);
+              if (adsData) {
+                database.updatePaper(paper.id, { arxiv_id: contentIds.arxiv_id }, false);
+              }
+            }
+            if (!adsData && contentIds.bibcode) {
+              sendConsoleLog(`[${shortTitle}] Trying extracted bibcode: ${contentIds.bibcode}`, 'info');
+              adsData = await adsApi.getByBibcode(token, contentIds.bibcode);
+            }
+
+            // Strategy 3: Use LLM to extract metadata if available
+            if (!adsData) {
+              let pdfMeta = pdfImport.extractMetadataFromPDF(textContent);
+
+              const service = getLlmService();
+              const connectionCheck = await service.checkConnection().catch(() => ({ connected: false }));
+              if (connectionCheck.connected) {
+                try {
+                  sendConsoleLog(`[${shortTitle}] Using LLM to extract metadata...`, 'info');
+                  const llmResponse = await service.generate(
+                    PROMPTS.extractMetadata.user(textContent.substring(0, 8000)),
+                    {
+                      systemPrompt: PROMPTS.extractMetadata.system,
+                      temperature: 0.1,
+                      maxTokens: 500,
+                      noThink: true
+                    }
+                  );
+                  const llmMeta = parseMetadataResponse(llmResponse);
+
+                  // Merge LLM results
+                  if (llmMeta.title) pdfMeta.title = llmMeta.title;
+                  if (llmMeta.firstAuthor) pdfMeta.firstAuthor = llmMeta.firstAuthor;
+                  if (llmMeta.year) pdfMeta.year = llmMeta.year;
+                  if (llmMeta.journal) pdfMeta.journal = llmMeta.journal;
+
+                  // Try LLM-extracted identifiers
+                  if (llmMeta.doi && !adsData) {
+                    sendConsoleLog(`[${shortTitle}] Trying LLM-extracted DOI: ${llmMeta.doi}`, 'info');
+                    adsData = await adsApi.getByDOI(token, llmMeta.doi);
+                    if (adsData) {
+                      database.updatePaper(paper.id, { doi: llmMeta.doi }, false);
+                    }
+                  }
+                  if (llmMeta.arxiv_id && !adsData) {
+                    sendConsoleLog(`[${shortTitle}] Trying LLM-extracted arXiv: ${llmMeta.arxiv_id}`, 'info');
+                    adsData = await adsApi.getByArxiv(token, llmMeta.arxiv_id);
+                    if (adsData) {
+                      database.updatePaper(paper.id, { arxiv_id: llmMeta.arxiv_id }, false);
+                    }
+                  }
+                } catch (llmError) {
+                  sendConsoleLog(`[${shortTitle}] LLM extraction failed: ${llmError.message}`, 'warn');
+                }
+              }
+
+              // Use extracted metadata for smart search
+              if (!adsData && (pdfMeta.title || pdfMeta.firstAuthor)) {
+                sendConsoleLog(`[${shortTitle}] Trying smart search with PDF metadata...`, 'info');
+                adsData = await adsApi.smartSearch(token, {
+                  title: pdfMeta.title || paper.title,
+                  firstAuthor: pdfMeta.firstAuthor,
+                  year: pdfMeta.year || paper.year,
+                  journal: pdfMeta.journal || paper.journal
+                });
+              }
+            }
+          }
+        }
+
+        // Strategy 4: Fall back to basic smart search using paper metadata
+        if (!adsData && paper.title) {
+          let firstAuthor = null;
+          if (paper.authors && paper.authors.length > 0) {
+            const authorStr = paper.authors[0];
+            if (authorStr.includes(',')) {
+              firstAuthor = authorStr.split(',')[0].trim();
+            } else {
+              const parts = authorStr.trim().split(/\s+/);
+              if (parts.length > 0) {
+                firstAuthor = parts[parts.length - 1];
+              }
+            }
+          }
+
+          sendConsoleLog(`[${shortTitle}] Trying smart search (author=${firstAuthor || 'none'}, year=${paper.year || 'none'})`, 'info');
+          adsData = await adsApi.smartSearch(token, {
+            title: paper.title,
+            firstAuthor: firstAuthor,
+            year: paper.year,
+            journal: paper.journal
+          });
+        }
+
+        if (adsData) {
+          sendConsoleLog(`[${shortTitle}] Found: ${adsData.bibcode}`, 'success');
+
+          // Check if another paper already has this bibcode (duplicate detection)
+          const existingPaper = database.getPaperByBibcode(adsData.bibcode);
+          if (existingPaper && existingPaper.id !== paper.id) {
+            sendConsoleLog(`DUPLICATE: This paper already exists in your library!`, 'warn');
+            sendConsoleLog(`  Current: "${paper.title?.substring(0, 50)}..." (ID: ${paper.id})`, 'info');
+            sendConsoleLog(`  Existing: "${existingPaper.title?.substring(0, 50)}..." (ID: ${existingPaper.id})`, 'info');
+            sendConsoleLog(`  Bibcode: ${adsData.bibcode}`, 'info');
+            sendConsoleLog(`  Consider deleting the duplicate entry.`, 'info');
+            results.skipped++;
+            continue;
+          }
+
+          database.updatePaper(paper.id, { bibcode: adsData.bibcode }, false);
+
+          const result = await processPaper(paper, adsData);
+          if (result.success) {
+            results.updated++;
+          } else {
+            results.failed++;
+            results.errors.push({ paper: paper.title, error: result.error });
+          }
+        } else {
+          sendConsoleLog(`[${shortTitle}] No match found`, 'warn');
+          results.skipped++;
+        }
+      } catch (error) {
+        sendConsoleLog(`[${shortTitle}] Lookup failed: ${error.message}`, 'error');
+        results.failed++;
+        results.errors.push({ paper: paper.title, error: error.message });
+      }
     }
   }
 
@@ -2017,11 +2250,12 @@ ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
 
   // Send completion with data stats
   const stats = adsApi.getSyncStats();
-  sendConsoleLog(`Sync complete: ${results.updated} updated, ${results.skipped} skipped, ${results.failed} failed (${adsApi.formatBytes(stats.bytesReceived)} received)`,
-    results.failed > 0 ? 'warn' : 'success');
-  mainWindow.webContents.send('ads-sync-progress', { done: true, results });
+  const cancelled = syncCancelled;
+  sendConsoleLog(`Sync ${cancelled ? 'cancelled' : 'complete'}: ${results.updated} updated, ${results.skipped} skipped, ${results.failed} failed (${adsApi.formatBytes(stats.bytesReceived)} received)`,
+    cancelled ? 'warn' : (results.failed > 0 ? 'warn' : 'success'));
+  mainWindow.webContents.send('ads-sync-progress', { done: true, results, cancelled });
 
-  return { success: true, results };
+  return { success: true, results, cancelled };
 });
 
 // ===== ADS Search & Import IPC Handlers =====

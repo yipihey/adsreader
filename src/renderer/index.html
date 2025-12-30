@@ -94,20 +94,30 @@
       </div>
 
       <div class="sidebar-section">
-        <div class="section-header">Settings</div>
-        <div class="nav-item" id="ads-settings-btn">
-          <span class="nav-icon">🔑</span>
-          <span>ADS API Token</span>
-          <span class="nav-status" id="ads-status">●</span>
+        <div class="section-header collapsible" id="settings-header">
+          <span>Settings</span>
+          <span class="section-toggle" id="settings-toggle">▼</span>
         </div>
-        <div class="nav-item" id="llm-settings-btn">
-          <span class="nav-icon">🤖</span>
-          <span>AI / Ollama</span>
-          <span class="nav-status" id="llm-status">●</span>
-        </div>
-        <div class="nav-item" id="preferences-btn">
-          <span class="nav-icon">⚙️</span>
-          <span>Preferences</span>
+        <div class="settings-items" id="settings-items">
+          <div class="nav-item" id="ads-settings-btn">
+            <span class="nav-icon">🔑</span>
+            <span>ADS API Token</span>
+            <span class="nav-status" id="ads-status">●</span>
+          </div>
+          <div class="nav-item" id="library-proxy-btn">
+            <span class="nav-icon">🏛️</span>
+            <span>Library Proxy</span>
+            <span class="nav-status" id="proxy-status">●</span>
+          </div>
+          <div class="nav-item" id="llm-settings-btn">
+            <span class="nav-icon">🤖</span>
+            <span>AI / Ollama</span>
+            <span class="nav-status" id="llm-status">●</span>
+          </div>
+          <div class="nav-item" id="preferences-btn">
+            <span class="nav-icon">⚙️</span>
+            <span>Preferences</span>
+          </div>
         </div>
       </div>
 
@@ -211,6 +221,10 @@
               <span class="sort-label">Cites</span>
               <span class="sort-arrow">↓</span>
             </button>
+            <button class="sort-btn" data-sort="bibcode" data-order="asc" title="Bibcode">
+              <span class="sort-label">Bibcode</span>
+              <span class="sort-arrow">↑</span>
+            </button>
           </div>
           <div class="paper-list" id="paper-list">
             <!-- Paper items rendered dynamically -->
@@ -246,7 +260,7 @@
               <!-- Abstract Tab -->
               <div class="tab-pane hidden" id="tab-abstract">
                 <div class="abstract-content" id="abstract-content">
-                  <p class="no-content">No abstract available. Click "Fetch from ADS" to retrieve metadata.</p>
+                  <p class="no-content">No abstract available. Click "Sync" to retrieve metadata from ADS.</p>
                 </div>
                 <div class="keywords-section" id="keywords-section">
                   <h4>Keywords</h4>
@@ -265,7 +279,7 @@
                   </div>
                 </div>
                 <div class="refs-list" id="refs-list">
-                  <p class="no-content">No references loaded. Click "Fetch from ADS" to retrieve.</p>
+                  <p class="no-content">No references loaded. Click "Sync" to retrieve from ADS.</p>
                 </div>
               </div>
 
@@ -280,13 +294,13 @@
                   </div>
                 </div>
                 <div class="cites-list" id="cites-list">
-                  <p class="no-content">No citations loaded. Click "Fetch from ADS" to retrieve.</p>
+                  <p class="no-content">No citations loaded. Click "Sync" to retrieve from ADS.</p>
                 </div>
               </div>
 
               <!-- BibTeX Tab -->
               <div class="tab-pane hidden" id="tab-bibtex">
-                <textarea class="bibtex-content" id="bibtex-content" readonly placeholder="No BibTeX available. Click 'Fetch from ADS' to retrieve."></textarea>
+                <textarea class="bibtex-content" id="bibtex-content" readonly placeholder="No BibTeX available. Click 'Sync' to retrieve from ADS."></textarea>
                 <div class="bibtex-buttons">
                   <button class="copy-btn" id="copy-bibtex-btn">Copy BibTeX</button>
                   <button class="copy-btn" id="export-bibtex-btn">Export BibTeX</button>
@@ -457,17 +471,26 @@
       <p>Enter your ADS API token to enable metadata lookup, references, and citations.</p>
       <p class="modal-help">Get your token from <a href="#" id="ads-token-link">ui.adsabs.harvard.edu/user/settings/token</a></p>
       <input type="text" id="ads-token-input" placeholder="Enter your ADS API token">
-
-      <h3 style="margin-top: 20px;">Library Proxy (Optional)</h3>
-      <p>Enter your institution's proxy URL to access paywalled publisher PDFs.</p>
-      <p class="modal-help">Example: https://proxy.library.edu/login?url=</p>
-      <input type="text" id="library-proxy-input" placeholder="https://proxy.library.edu/login?url=">
-
       <div class="modal-actions">
         <button class="secondary-button" id="ads-cancel-btn">Cancel</button>
         <button class="primary-button" id="ads-save-btn">Save</button>
       </div>
       <div class="modal-status" id="ads-modal-status"></div>
+    </div>
+  </div>
+
+  <!-- Library Proxy Modal -->
+  <div class="modal hidden" id="library-proxy-modal">
+    <div class="modal-content">
+      <h2>Library Proxy</h2>
+      <p>Enter your institution's proxy URL to access paywalled publisher PDFs.</p>
+      <p class="modal-help">Example: https://proxy.library.edu/login?url=</p>
+      <input type="text" id="library-proxy-input" placeholder="https://proxy.library.edu/login?url=">
+      <div class="modal-actions">
+        <button class="secondary-button" id="proxy-cancel-btn">Cancel</button>
+        <button class="primary-button" id="proxy-save-btn">Save</button>
+      </div>
+      <div class="modal-status" id="proxy-modal-status"></div>
     </div>
   </div>
 
@@ -580,13 +603,15 @@
       </div>
       <div class="ads-sync-progress">
         <div class="sync-status" id="sync-status">Preparing...</div>
+        <div class="sync-timer" id="sync-timer" style="text-align: center; font-size: 0.9em; color: #888; margin: 4px 0;">0:00</div>
         <div class="sync-progress-bar">
           <div class="sync-progress-fill" id="sync-progress-fill" style="width: 0%"></div>
         </div>
         <div class="sync-current-paper" id="sync-current-paper"></div>
       </div>
-      <div class="modal-footer" id="sync-footer" style="display: none;">
-        <button class="primary-button" id="sync-close-btn">Close</button>
+      <div class="modal-footer" style="display: flex; justify-content: center; gap: 10px;">
+        <button class="secondary-button" id="sync-cancel-btn">Cancel</button>
+        <button class="primary-button hidden" id="sync-close-btn">Close</button>
       </div>
     </div>
   </div>

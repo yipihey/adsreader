@@ -1266,15 +1266,15 @@ const capacitorAPI = {
     return { success: false, error: 'Not implemented for iOS' };
   },
 
+  async adsCancelSync() {
+    return { success: true };
+  },
+
   async adsGetReferences(bibcode) {
     return { success: false, error: 'Not implemented for iOS' };
   },
 
   async adsGetCitations(bibcode) {
-    return { success: false, error: 'Not implemented for iOS' };
-  },
-
-  async adsFetchMetadata(paperId) {
     return { success: false, error: 'Not implemented for iOS' };
   },
 

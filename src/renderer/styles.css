@@ -341,6 +341,34 @@ body.resizing * {
   letter-spacing: 0.5px;
 }
 
+.section-header.collapsible {
+  cursor: pointer;
+  user-select: none;
+}
+
+.section-header.collapsible:hover {
+  color: var(--text-primary);
+}
+
+.section-toggle {
+  font-size: 8px;
+  transition: transform 0.2s ease;
+}
+
+.section-header.collapsed .section-toggle {
+  transform: rotate(-90deg);
+}
+
+.settings-items {
+  overflow: hidden;
+  transition: max-height 0.2s ease;
+  max-height: 200px;
+}
+
+.settings-items.collapsed {
+  max-height: 0;
+}
+
 .add-collection-btn {
   background: none;
   border: none;
@@ -1239,10 +1267,11 @@ body.ios .desktop-only {
 /* Sort Toolbar */
 .sort-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
   padding: 4px 8px;
-  background: var(--bg-tertiary);
+  background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
 }
 
@@ -1250,19 +1279,20 @@ body.ios .desktop-only {
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 3px 6px;
-  background: none;
-  border: 1px solid transparent;
-  border-radius: 3px;
+  padding: 2px 6px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
   color: var(--text-secondary);
   font-size: 10px;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all 0.1s;
 }
 
 .sort-btn:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
+  border-color: var(--accent);
 }
 
 .sort-btn.active {

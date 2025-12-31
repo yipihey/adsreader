@@ -2327,6 +2327,85 @@ body.ios-platform .pdf-container {
   color: var(--text-muted);
 }
 
+/* No PDF content message */
+.pdf-no-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 40px;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.pdf-no-content-icon {
+  font-size: 64px;
+  margin-bottom: 16px;
+  opacity: 0.5;
+}
+
+.pdf-no-content-message {
+  font-size: 18px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 24px;
+}
+
+.pdf-no-content-sources {
+  margin-top: 8px;
+}
+
+.pdf-no-content-sources p {
+  margin-bottom: 12px;
+  color: var(--text-secondary);
+}
+
+.pdf-source-buttons {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.pdf-source-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 20px;
+  background: var(--accent-color);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.1s;
+}
+
+.pdf-source-btn:hover {
+  background: var(--accent-hover);
+  transform: translateY(-1px);
+}
+
+.pdf-source-btn:disabled {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  cursor: not-allowed;
+  transform: none;
+}
+
+.pdf-no-content-hint {
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--text-muted);
+  max-width: 300px;
+}
+
+.pdf-no-content-hint p {
+  margin: 0;
+}
+
 /* iOS PDF native viewer prompt */
 .ios-pdf-prompt {
   flex-direction: column;

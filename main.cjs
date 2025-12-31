@@ -1936,6 +1936,7 @@ ipcMain.handle('download-pdf-from-source', async (event, paperId, sourceType) =>
 
     // Find the requested source type
     let targetSource = null;
+    let pubHtmlUrl = null;
     const typeMap = {
       'arxiv': 'EPRINT_PDF',
       'ads': 'ADS_PDF',
@@ -1948,6 +1949,20 @@ ipcMain.handle('download-pdf-from-source', async (event, paperId, sourceType) =>
       if (linkType.includes(targetType) && source.url && source.url.startsWith('http')) {
         targetSource = source;
         break;
+      }
+      // Track PUB_HTML as fallback for publisher downloads
+      if (sourceType === 'publisher' && linkType.includes('PUB_HTML') && source.url) {
+        pubHtmlUrl = source.url;
+      }
+    }
+
+    // If no direct PDF URL for publisher, try to derive from PUB_HTML
+    if (!targetSource && sourceType === 'publisher' && pubHtmlUrl) {
+      sendConsoleLog(`No PUB_PDF found, trying to derive from PUB_HTML...`, 'info');
+      const derivedUrl = convertPublisherHtmlToPdf(pubHtmlUrl);
+      if (derivedUrl) {
+        targetSource = { url: derivedUrl, link_type: 'PUB_PDF_DERIVED' };
+        sendConsoleLog(`Derived PDF URL: ${derivedUrl}`, 'success');
       }
     }
 
@@ -5044,7 +5059,51 @@ ipcMain.handle('download-publisher-pdf', async (event, paperId, publisherUrl, pr
       }
     });
 
-    authWindow.setTitle('Publisher PDF - Click "Download PDF" if automatic download fails');
+    authWindow.setTitle('Downloading PDF...');
+
+    // Show loading indicator immediately
+    const loadingHtml = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          body {
+            margin: 0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #fff;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          }
+          .spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid rgba(255,255,255,0.1);
+            border-top-color: #4a9eff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 24px;
+          }
+          @keyframes spin {
+            to { transform: rotate(360deg); }
+          }
+          h2 { margin: 0 0 8px 0; font-weight: 500; }
+          p { margin: 0; opacity: 0.7; font-size: 14px; }
+          .status { margin-top: 24px; font-size: 13px; opacity: 0.5; }
+        </style>
+      </head>
+      <body>
+        <div class="spinner"></div>
+        <h2>Downloading PDF</h2>
+        <p>Connecting to publisher...</p>
+        <p class="status">The download will start automatically</p>
+      </body>
+      </html>
+    `;
+    authWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(loadingHtml)}`);
 
     let downloadCompleted = false;
     let resolved = false;
@@ -5177,6 +5236,23 @@ ipcMain.handle('download-publisher-pdf', async (event, paperId, publisherUrl, pr
       console.log('Download triggered:', item.getFilename(), item.getMimeType());
       item.setSavePath(destPath);
 
+      // Update window title to show download is happening
+      if (!authWindow.isDestroyed()) {
+        authWindow.setTitle('Downloading PDF...');
+      }
+
+      // Track download progress
+      item.on('updated', (event, state) => {
+        if (state === 'progressing' && !authWindow.isDestroyed()) {
+          const received = item.getReceivedBytes();
+          const total = item.getTotalBytes();
+          if (total > 0) {
+            const percent = Math.round((received / total) * 100);
+            authWindow.setTitle(`Downloading PDF... ${percent}%`);
+          }
+        }
+      });
+
       item.on('done', (event, state) => {
         if (state === 'completed') {
           console.log('Download completed:', destPath);
@@ -5244,8 +5320,12 @@ ipcMain.handle('download-publisher-pdf', async (event, paperId, publisherUrl, pr
       }
     });
 
-    // Load the URL
-    authWindow.loadURL(url);
+    // Load the actual URL after a brief delay to show loading indicator
+    setTimeout(() => {
+      if (!authWindow.isDestroyed()) {
+        authWindow.loadURL(url);
+      }
+    }, 100);
   });
 });
 

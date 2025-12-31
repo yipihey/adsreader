@@ -1506,19 +1506,27 @@ class ADSReader {
   }
 
   async downloadPdfSource(paperId, sourceType) {
+    // Normalize source type: buttons use uppercase (EPRINT_PDF), but download uses lowercase (arxiv)
+    const typeToLegacy = {
+      'EPRINT_PDF': 'arxiv',
+      'PUB_PDF': 'publisher',
+      'ADS_PDF': 'ads'
+    };
+    const normalizedType = typeToLegacy[sourceType] || sourceType;
+
     // Use the download queue if available, otherwise direct download
     if (window.electronAPI?.downloadQueue?.enqueue) {
       try {
-        await window.electronAPI.downloadQueue.enqueue(paperId, sourceType);
+        await window.electronAPI.downloadQueue.enqueue(paperId, normalizedType);
         this.showDownloadQueue();
         this.addConsoleMessage(`Queued ${this.getSourceLabel(sourceType)} download`, 'info');
       } catch (e) {
         console.error('[downloadPdfSource] Queue failed, trying direct download:', e);
-        await this.downloadFromSource(paperId, sourceType, null);
+        await this.downloadFromSource(paperId, normalizedType, null);
       }
     } else {
       // Direct download using legacy method
-      await this.downloadFromSource(paperId, sourceType, null);
+      await this.downloadFromSource(paperId, normalizedType, null);
     }
   }
 
@@ -1570,9 +1578,9 @@ class ADSReader {
     if (!queueList) return;
 
     // Get queue state from API if available
-    if (window.electronAPI?.downloadQueue?.getState) {
+    if (window.electronAPI?.downloadQueue?.status) {
       try {
-        const state = await window.electronAPI.downloadQueue.getState();
+        const state = await window.electronAPI.downloadQueue.status();
         const items = state.items || [];
 
         if (items.length === 0) {
@@ -1652,7 +1660,22 @@ class ADSReader {
 
   async handleDownloadComplete(data) {
     this.addConsoleMessage(`Downloaded: ${data.sourceType || 'PDF'}`, 'success');
-    this.refreshQueueList();
+    await this.refreshQueueList();
+
+    // Check if queue is empty and hide the panel after a short delay
+    if (window.electronAPI?.downloadQueue?.status) {
+      try {
+        const state = await window.electronAPI.downloadQueue.status();
+        const items = state.items || [];
+        const activeOrPending = items.filter(i => i.status === 'downloading' || i.status === 'pending');
+        if (activeOrPending.length === 0) {
+          // All downloads complete - hide panel after brief delay so user sees success
+          setTimeout(() => this.hideDownloadQueue(), 1500);
+        }
+      } catch (e) {
+        // Ignore errors
+      }
+    }
 
     // Refresh the files panel if viewing this paper
     if (this.selectedPaper?.id === data.paperId) {
@@ -2477,7 +2500,7 @@ class ADSReader {
     // Focus Notes Mode (desktop only)
     document.getElementById('focus-notes-btn')?.addEventListener('click', () => this.enterFocusNotesMode());
     document.getElementById('focus-exit-btn')?.addEventListener('click', () => this.exitFocusNotesMode());
-    document.getElementById('focus-add-note-btn')?.addEventListener('click', () => this.addNote());
+    // Removed: focus-add-note-btn event listener (button removed from UI)
 
     // Resize handles
     this.setupResizeHandlers();
@@ -2930,7 +2953,7 @@ class ADSReader {
           this.updatePaperRating(this.selectedPaper.id, 0); // Clear rating
         }
         break;
-      case 'c':
+      case 't':
         e.preventDefault();
         this.toggleSidebar();
         break;
@@ -4162,6 +4185,81 @@ class ADSReader {
     }
   }
 
+  async showNoPdfMessage(container, paper, fileMissing = false) {
+    // Check if this paper has available PDF sources from ADS
+    let availableSources = [];
+
+    if (paper.bibcode && window.electronAPI?.adsGetEsources) {
+      try {
+        const esourcesResult = await window.electronAPI.adsGetEsources(paper.bibcode);
+        if (esourcesResult.success && esourcesResult.data) {
+          const sources = esourcesResult.data;
+          if (sources.arxiv) {
+            availableSources.push({ type: 'EPRINT_PDF', label: 'arXiv', icon: '📑' });
+          }
+          if (sources.publisher) {
+            availableSources.push({ type: 'PUB_PDF', label: 'Publisher', icon: '📰' });
+          }
+          if (sources.ads) {
+            availableSources.push({ type: 'ADS_PDF', label: 'ADS Scan', icon: '📜' });
+          }
+        }
+      } catch (e) {
+        console.warn('[showNoPdfMessage] Failed to get esources:', e);
+      }
+    }
+
+    const message = fileMissing
+      ? 'PDF file not found'
+      : 'No associated PDF yet';
+
+    let html = `
+      <div class="pdf-no-content">
+        <div class="pdf-no-content-icon">📄</div>
+        <div class="pdf-no-content-message">${message}</div>
+    `;
+
+    if (availableSources.length > 0) {
+      html += `
+        <div class="pdf-no-content-sources">
+          <p>Download from:</p>
+          <div class="pdf-source-buttons">
+            ${availableSources.map(s => `
+              <button class="pdf-source-btn" data-source="${s.type}">
+                ${s.icon} ${s.label}
+              </button>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    } else if (!paper.bibcode) {
+      html += `
+        <div class="pdf-no-content-hint">
+          <p>Drag and drop a PDF file here to attach it to this paper.</p>
+        </div>
+      `;
+    } else {
+      html += `
+        <div class="pdf-no-content-hint">
+          <p>Sync with ADS to check for available PDFs, or drag and drop a PDF file here.</p>
+        </div>
+      `;
+    }
+
+    html += '</div>';
+    container.innerHTML = html;
+
+    // Add click handlers for download buttons
+    container.querySelectorAll('.pdf-source-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const sourceType = btn.dataset.source;
+        btn.disabled = true;
+        btn.textContent = 'Downloading...';
+        await this.downloadPdfSource(paper.id, sourceType);
+      });
+    });
+  }
+
   async loadPDF(paper) {
     const container = document.getElementById('pdf-container');
 
@@ -4207,7 +4305,8 @@ class ADSReader {
     this.pageRotations = {};
 
     if (!paper.pdf_path) {
-      container.innerHTML = '<div class="pdf-loading">No PDF available</div>';
+      // Show helpful message with download options if available
+      await this.showNoPdfMessage(container, paper);
       document.getElementById('total-pages').textContent = '0';
       document.getElementById('current-page').textContent = '0';
       if (this.isMobileView) {
@@ -4252,7 +4351,8 @@ class ADSReader {
         // Desktop: use file:// URL
         const pdfPath = await window.electronAPI.getPdfPath(paper.pdf_path);
         if (!pdfPath) {
-          container.innerHTML = '<div class="pdf-loading">PDF path not found</div>';
+          // PDF path exists in DB but file not found - show download options
+          await this.showNoPdfMessage(container, paper, true);
           return;
         }
 
@@ -4307,7 +4407,8 @@ class ADSReader {
     container.innerHTML = '';
 
     // Use device pixel ratio for sharper rendering on high-DPI displays
-    const dpr = window.devicePixelRatio || 1;
+    // Multiply by 1.2 for extra sharpness on desktop
+    const dpr = (window.devicePixelRatio || 1) * 1.2;
 
     // Build render order: target page first, then all others
     const pageOrder = [];
@@ -4483,7 +4584,8 @@ class ADSReader {
     if (!canvas) return;
 
     // Use device pixel ratio for sharper rendering
-    const dpr = window.devicePixelRatio || 1;
+    // Multiply by 1.2 for extra sharpness on desktop
+    const dpr = (window.devicePixelRatio || 1) * 1.2;
 
     // Set display size (CSS pixels)
     canvas.style.width = `${viewport.width}px`;
@@ -5003,6 +5105,8 @@ class ADSReader {
         // If this paper is selected, refresh detail view and switch to PDF tab
         if (this.selectedPaper?.id === paperId) {
           this.selectedPaper = paper;
+          // Refresh the Files Panel immediately so it shows the new file
+          await this.renderFilesPanel(paper);
           this.switchTab('pdf');
           await this.displayPaper(paperId);
         }
@@ -7072,6 +7176,32 @@ class ADSReader {
       if (saved) splitPosition = saved;
     }
     this.setFocusSplitPosition(splitPosition);
+
+    // If no annotations exist, create an empty note and focus on it
+    if (this.annotations.length === 0) {
+      try {
+        const result = await window.electronAPI.createAnnotation(this.selectedPaper.id, {
+          page_number: 1,
+          selection_text: null,
+          selection_rects: null,
+          note_content: '',
+          color: '#ffeb3b',
+          pdf_source: this.currentPdfSource
+        });
+
+        if (result.success && result.annotation) {
+          await this.loadAnnotations(this.selectedPaper.id);
+          this.renderHighlightsOnPdf();
+
+          // Start editing the new note after DOM updates
+          requestAnimationFrame(() => {
+            this.editAnnotation(result.annotation.id);
+          });
+        }
+      } catch (error) {
+        console.error('Error creating initial note in focus mode:', error);
+      }
+    }
 
     console.log('[ADSReader] Entered Focus Notes mode');
   }

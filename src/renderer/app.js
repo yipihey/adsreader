@@ -1577,6 +1577,17 @@ class ADSReader {
           case 'ads-lookup-apply-btn':
             this.applyAdsLookupMetadata();
             break;
+          // Feedback modal
+          case 'send-feedback-btn':
+            this.showFeedbackModal();
+            break;
+          case 'feedback-close-btn':
+          case 'feedback-cancel-btn':
+            this.hideFeedbackModal();
+            break;
+          case 'feedback-submit-btn':
+            this.submitFeedback();
+            break;
         }
       }
 
@@ -1632,6 +1643,13 @@ class ADSReader {
     window.electronAPI.onConsoleLog((data) => {
       this.consoleLog(data.message, data.type || 'info');
     });
+
+    // Listen for feedback modal request from menu
+    if (window.electronAPI.onShowFeedbackModal) {
+      window.electronAPI.onShowFeedbackModal(() => {
+        this.showFeedbackModal();
+      });
+    }
 
     // Search input (needs direct listener for 'input' event, not handled by click delegation)
     const searchInput = document.getElementById('search-input');
@@ -7194,6 +7212,142 @@ class ADSReader {
 
   hideLlmModal() {
     document.getElementById('llm-modal').classList.add('hidden');
+  }
+
+  // ========================================
+  // Feedback Modal Methods
+  // ========================================
+
+  showFeedbackModal() {
+    const modal = document.getElementById('feedback-modal');
+    if (!modal) return;
+
+    // Reset form
+    document.getElementById('feedback-subject').value = '';
+    document.getElementById('feedback-description').value = '';
+    document.querySelector('input[name="feedback-type"][value="bug"]').checked = true;
+    document.getElementById('include-system-info').checked = true;
+
+    // Update system info preview
+    this.updateSystemInfoPreview();
+
+    // Add listener for checkbox changes
+    const checkbox = document.getElementById('include-system-info');
+    checkbox.addEventListener('change', () => this.updateSystemInfoPreview());
+
+    modal.classList.remove('hidden');
+  }
+
+  hideFeedbackModal() {
+    const modal = document.getElementById('feedback-modal');
+    if (modal) {
+      modal.classList.add('hidden');
+    }
+  }
+
+  async updateSystemInfoPreview() {
+    const preview = document.getElementById('system-info-preview');
+    const checkbox = document.getElementById('include-system-info');
+
+    if (!preview || !checkbox?.checked) {
+      if (preview) preview.textContent = '';
+      return;
+    }
+
+    const info = await this.collectSystemInfo();
+    preview.textContent = `App Version: ${info.appVersion}
+Platform: ${info.platform}
+Papers: ${info.paperCount}
+View: ${info.currentView}
+Time: ${info.timestamp}`;
+  }
+
+  async collectSystemInfo() {
+    let appVersion = '1.0.0-beta.1';
+    try {
+      if (window.electronAPI?.getAppVersion) {
+        appVersion = await window.electronAPI.getAppVersion();
+      }
+    } catch (e) {
+      // Use default version
+    }
+
+    return {
+      appVersion,
+      platform: this.isIOS ? 'iOS' : 'macOS',
+      osVersion: navigator.userAgent,
+      paperCount: this.papers?.length || 0,
+      currentView: this.getCurrentViewName(),
+      timestamp: new Date().toISOString(),
+      recentErrors: this.consoleErrors || []
+    };
+  }
+
+  getCurrentViewName() {
+    if (this.currentTab) return `Tab: ${this.currentTab}`;
+    if (this.currentView) return `View: ${this.currentView}`;
+    if (this.selectedCollection) return `Collection: ${this.selectedCollection.name}`;
+    return 'Main';
+  }
+
+  async submitFeedback() {
+    const type = document.querySelector('input[name="feedback-type"]:checked')?.value || 'general';
+    const subject = document.getElementById('feedback-subject')?.value?.trim();
+    const description = document.getElementById('feedback-description')?.value?.trim();
+    const includeSystemInfo = document.getElementById('include-system-info')?.checked;
+
+    if (!subject) {
+      this.showNotification('Please enter a subject', 'error');
+      return;
+    }
+
+    if (!description) {
+      this.showNotification('Please enter a description', 'error');
+      return;
+    }
+
+    const systemInfo = includeSystemInfo ? await this.collectSystemInfo() : null;
+
+    // Build email body
+    let body = `Type: ${type.charAt(0).toUpperCase() + type.slice(1)}
+Subject: ${subject}
+
+Description:
+${description}`;
+
+    if (systemInfo) {
+      body += `
+
+---
+System Information:
+App Version: ${systemInfo.appVersion}
+Platform: ${systemInfo.platform}
+OS: ${systemInfo.osVersion}
+Papers: ${systemInfo.paperCount}
+View: ${systemInfo.currentView}
+Time: ${systemInfo.timestamp}`;
+    }
+
+    // Create mailto URL - using a placeholder email for now
+    const feedbackEmail = 'adsreader@icloud.com';
+    const emailSubject = `[${type}] ${subject}`;
+    const mailtoUrl = `mailto:${feedbackEmail}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(body)}`;
+
+    // Open email client
+    try {
+      if (this.isIOS) {
+        window.location.href = mailtoUrl;
+      } else if (window.electronAPI?.openExternal) {
+        await window.electronAPI.openExternal(mailtoUrl);
+      } else {
+        window.open(mailtoUrl);
+      }
+      this.hideFeedbackModal();
+      this.showNotification('Opening email client...', 'success');
+    } catch (e) {
+      this.showNotification('Failed to open email client', 'error');
+      console.error('Feedback submission error:', e);
+    }
   }
 
   // Update the active provider indicator display

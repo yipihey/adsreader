@@ -1,7 +1,7 @@
 {
   "name": "ads-reader",
   "productName": "ADS Reader",
-  "version": "0.1.0",
+  "version": "1.0.0-beta.1",
   "description": "Scientific publication reader with NASA ADS integration",
   "main": "main.cjs",
   "type": "module",

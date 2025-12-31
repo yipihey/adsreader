@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, clipboard, shell, session } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, clipboard, shell, session, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -4569,6 +4569,10 @@ ipcMain.handle('open-external', (event, url) => {
   shell.openExternal(url);
 });
 
+ipcMain.handle('get-app-version', () => {
+  return app.getVersion();
+});
+
 // Download publisher PDF through authentication window
 ipcMain.handle('download-publisher-pdf', async (event, paperId, publisherUrl, proxyUrl) => {
   const libraryPath = store.get('libraryPath');
@@ -4842,8 +4846,116 @@ ipcMain.handle('show-in-finder', (event, filePath) => {
   shell.showItemInFolder(filePath);
 });
 
+// Create application menu
+function createApplicationMenu() {
+  const isMac = process.platform === 'darwin';
+
+  const template = [
+    // App menu (macOS only)
+    ...(isMac ? [{
+      label: app.name,
+      submenu: [
+        { role: 'about' },
+        { type: 'separator' },
+        { role: 'services' },
+        { type: 'separator' },
+        { role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { role: 'quit' }
+      ]
+    }] : []),
+    // Edit menu
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        ...(isMac ? [
+          { role: 'pasteAndMatchStyle' },
+          { role: 'delete' },
+          { role: 'selectAll' },
+        ] : [
+          { role: 'delete' },
+          { type: 'separator' },
+          { role: 'selectAll' }
+        ])
+      ]
+    },
+    // View menu
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' }
+      ]
+    },
+    // Window menu
+    {
+      label: 'Window',
+      submenu: [
+        { role: 'minimize' },
+        { role: 'zoom' },
+        ...(isMac ? [
+          { type: 'separator' },
+          { role: 'front' },
+          { type: 'separator' },
+          { role: 'window' }
+        ] : [
+          { role: 'close' }
+        ])
+      ]
+    },
+    // Help menu
+    {
+      role: 'help',
+      submenu: [
+        {
+          label: 'Send Feedback',
+          accelerator: 'CmdOrCtrl+Shift+F',
+          click: async () => {
+            const win = BrowserWindow.getFocusedWindow();
+            if (win) {
+              win.webContents.send('show-feedback-modal');
+            }
+          }
+        },
+        { type: 'separator' },
+        {
+          label: 'ADS Reader on GitHub',
+          click: async () => {
+            await shell.openExternal('https://github.com');
+          }
+        },
+        {
+          label: 'NASA ADS',
+          click: async () => {
+            await shell.openExternal('https://ui.adsabs.harvard.edu');
+          }
+        }
+      ]
+    }
+  ];
+
+  const menu = Menu.buildFromTemplate(template);
+  Menu.setApplicationMenu(menu);
+}
+
 // App lifecycle
 app.whenReady().then(() => {
+  createApplicationMenu();
   createWindow();
 
   app.on('activate', () => {

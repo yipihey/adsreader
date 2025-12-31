@@ -219,6 +219,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // UTILITIES
   // ═══════════════════════════════════════════════════════════════════════════
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
+  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
   downloadPublisherPdf: (paperId, publisherUrl, proxyUrl) => ipcRenderer.invoke('download-publisher-pdf', paperId, publisherUrl, proxyUrl),
   showInFinder: (filePath) => ipcRenderer.invoke('show-in-finder', filePath),
 
@@ -227,6 +228,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ═══════════════════════════════════════════════════════════════════════════
   onConsoleLog: (callback) => ipcRenderer.on('console-log', (event, data) => callback(data)),
   removeConsoleLogListeners: () => ipcRenderer.removeAllListeners('console-log'),
+  onShowFeedbackModal: (callback) => ipcRenderer.on('show-feedback-modal', () => callback()),
 
   // Platform info
   platform: process.platform

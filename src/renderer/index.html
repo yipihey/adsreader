@@ -195,6 +195,12 @@
             <span>AI Integration</span>
             <span class="nav-status" id="llm-status">●</span>
           </div>
+
+          <!-- Send Feedback -->
+          <div class="nav-item feedback-btn" id="send-feedback-btn">
+            <span class="nav-icon">💬</span>
+            <span>Send Feedback</span>
+          </div>
         </div>
       </div>
 
@@ -1105,6 +1111,59 @@
         <div class="progress-bar">
           <div class="progress-fill" id="migration-progress-fill"></div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Feedback Modal -->
+  <div class="modal hidden" id="feedback-modal">
+    <div class="modal-content feedback-modal-content">
+      <div class="modal-header">
+        <h2>Send Feedback</h2>
+        <button class="modal-close-btn" id="feedback-close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="feedback-type-selector">
+          <label class="feedback-type">
+            <input type="radio" name="feedback-type" value="bug" checked>
+            <span class="type-icon">Bug Report</span>
+          </label>
+          <label class="feedback-type">
+            <input type="radio" name="feedback-type" value="feature">
+            <span class="type-icon">Feature Request</span>
+          </label>
+          <label class="feedback-type">
+            <input type="radio" name="feedback-type" value="general">
+            <span class="type-icon">General Feedback</span>
+          </label>
+        </div>
+
+        <div class="feedback-form">
+          <div class="form-group">
+            <label for="feedback-subject">Subject</label>
+            <input type="text" id="feedback-subject" placeholder="Brief description of your feedback">
+          </div>
+
+          <div class="form-group">
+            <label for="feedback-description">Description</label>
+            <textarea id="feedback-description" rows="6" placeholder="Please describe the issue or suggestion in detail..."></textarea>
+          </div>
+
+          <div class="feedback-options">
+            <label class="checkbox-label">
+              <input type="checkbox" id="include-system-info" checked>
+              <span>Include system information (helps diagnose issues)</span>
+            </label>
+          </div>
+
+          <div class="system-info-preview" id="system-info-preview">
+            <!-- Populated dynamically when checkbox is checked -->
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="secondary-button" id="feedback-cancel-btn">Cancel</button>
+        <button class="primary-button" id="feedback-submit-btn">Send Feedback</button>
       </div>
     </div>
   </div>

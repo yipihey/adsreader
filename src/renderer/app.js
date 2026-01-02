@@ -3550,10 +3550,6 @@ class ADSReader {
           this.updatePaperRating(this.selectedPaper.id, 0); // Clear rating
         }
         break;
-      case 't':
-        e.preventDefault();
-        this.toggleSidebar();
-        break;
       case 'm':
         e.preventDefault();
         this.toggleMobileDrawer();

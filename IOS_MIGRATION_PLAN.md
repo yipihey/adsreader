@@ -25,7 +25,7 @@ This document outlines the strategy and step-by-step implementation plan for cre
 
 ### Current (Electron)
 ```
-ads-reader/
+adsreader/
 ├── main.js                    # Electron main process
 ├── preload.js                 # IPC bridge
 ├── src/
@@ -44,7 +44,7 @@ ads-reader/
 
 ### Target (Electron + Capacitor)
 ```
-ads-reader/
+adsreader/
 ├── main.js                    # Electron main process (unchanged)
 ├── preload.js                 # IPC bridge (unchanged)
 ├── src/

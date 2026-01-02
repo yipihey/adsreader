@@ -56,7 +56,7 @@ module.exports = {
       name: '@electron-forge/maker-deb',
       config: {
         options: {
-          name: 'ads-reader',
+          name: 'adsreader',
           productName: 'ADS Reader',
           icon: './assets/icon.png'
         }
@@ -66,7 +66,7 @@ module.exports = {
       name: '@electron-forge/maker-rpm',
       config: {
         options: {
-          name: 'ads-reader',
+          name: 'adsreader',
           productName: 'ADS Reader',
           icon: './assets/icon.png'
         }

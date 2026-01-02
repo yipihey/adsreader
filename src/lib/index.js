@@ -8,7 +8,7 @@
  * - Future apps embedding this as a plugin
  *
  * Usage:
- *   import { ADSApi, BibtexParser, LibraryManager } from '@ads-reader/core';
+ *   import { ADSApi, BibtexParser, LibraryManager } from '@adsreader/core';
  *   // or
  *   import * as AdsReaderCore from './src/lib';
  */

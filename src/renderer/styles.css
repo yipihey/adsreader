@@ -68,7 +68,8 @@ html, body {
 }
 
 .loading-icon {
-  font-size: 64px;
+  width: 80px;
+  height: 80px;
   margin-bottom: 20px;
   animation: pulse 2s ease-in-out infinite;
 }
@@ -542,7 +543,8 @@ html, body {
 }
 
 .setup-icon {
-  font-size: 56px;
+  width: 80px;
+  height: 80px;
   margin-bottom: 16px;
 }
 
@@ -2836,13 +2838,14 @@ body.ios-platform .pdf-container {
     display: none !important;
   }
 
-  /* Hide actions row on mobile - actions are integrated into tab row */
+  /* Hide most actions on mobile - but keep download dropdown for iOS */
   .bottom-bar-right {
     display: none !important;
   }
 
   /* Note: iOS handles bottom bar spacing via iOS-specific styles */
 }
+
 
 /* iOS safe area handling */
 @supports (padding-bottom: env(safe-area-inset-bottom)) {
@@ -3454,6 +3457,27 @@ body.ios-platform .pdf-container {
   border-radius: 3px;
   transition: width 0.2s ease;
   width: 0;
+}
+
+/* Export Book Modal */
+.export-book-info {
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+}
+
+.export-book-note {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+  line-height: 1.5;
+}
+
+.export-book-stats {
+  font-size: 13px;
+  color: var(--text-primary);
+  font-weight: 500;
 }
 
 /* Import modal specific */
@@ -6699,6 +6723,20 @@ body.viewing-pdf .mobile-top-bar {
   white-space: nowrap;
 }
 
+.mobile-top-bar .top-bar-logo {
+  height: 24px;
+  width: auto;
+  margin-left: auto;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  padding: 4px;
+  border-radius: 4px;
+}
+
+.mobile-top-bar .top-bar-logo:active {
+  opacity: 0.7;
+}
+
 .mobile-top-bar .search-btn {
   background: none;
   border: none;
@@ -6819,10 +6857,27 @@ body.viewing-pdf .mobile-top-bar {
   background: var(--bg-hover);
 }
 
+.mobile-download-menu .download-option.downloaded {
+  color: var(--success);
+}
+
 .mobile-download-menu .download-loading {
   padding: 8px 12px;
   color: var(--text-muted);
   font-size: 12px;
+}
+
+/* Download dropdown in bottom bar - menu opens upward */
+.bottom-bar .mobile-download-dropdown {
+  position: relative;
+}
+
+.bottom-bar .mobile-download-dropdown .mobile-download-menu {
+  top: auto;
+  bottom: 100%;
+  left: auto;
+  right: 0;
+  margin-bottom: 4px;
 }
 
 /* Mobile Library Picker Overlay */
@@ -8276,4 +8331,252 @@ body.focus-notes-mode .annotations-header h3 {
   .type-icon {
     font-size: 14px;
   }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   iOS SELECTION MODE
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Selection mode top bar - replaces normal top bar */
+.mobile-selection-bar {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: calc(36px + env(safe-area-inset-top));
+  padding-top: env(safe-area-inset-top);
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  z-index: 1001;
+  align-items: center;
+  justify-content: space-between;
+  padding-left: 12px;
+  padding-right: 12px;
+}
+
+.mobile-selection-bar:not(.hidden) {
+  display: flex;
+}
+
+.selection-count {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.selection-cancel-btn,
+.selection-action-btn-top {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 15px;
+  font-weight: 500;
+  padding: 8px 12px;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.selection-cancel-btn:active,
+.selection-action-btn-top:active {
+  opacity: 0.7;
+}
+
+/* iOS Action Sheet */
+.action-sheet-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 2000;
+}
+
+.action-sheet-overlay:not(.hidden) {
+  display: block;
+}
+
+.action-sheet {
+  display: none;
+  position: fixed;
+  bottom: 0;
+  left: 8px;
+  right: 8px;
+  z-index: 2001;
+  padding-bottom: calc(8px + env(safe-area-inset-bottom));
+}
+
+.action-sheet:not(.hidden) {
+  display: block;
+}
+
+.action-sheet-content {
+  background: var(--bg-secondary);
+  border-radius: 14px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.action-sheet-title {
+  padding: 12px 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  text-align: center;
+  border-bottom: 1px solid var(--border);
+}
+
+.action-sheet-btn {
+  width: 100%;
+  padding: 16px;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-size: 17px;
+  text-align: center;
+  border-bottom: 1px solid var(--border);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.action-sheet-btn:last-child {
+  border-bottom: none;
+}
+
+.action-sheet-btn:active {
+  background: var(--bg-tertiary);
+}
+
+.action-sheet-btn.action-sheet-danger {
+  color: #ff3b30;
+}
+
+.action-sheet-btn.downloaded-source {
+  color: var(--success);
+}
+
+.action-sheet-cancel {
+  width: 100%;
+  padding: 16px;
+  background: var(--bg-secondary);
+  border: none;
+  border-radius: 14px;
+  color: var(--accent);
+  font-size: 17px;
+  font-weight: 600;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.action-sheet-cancel:active {
+  background: var(--bg-tertiary);
+}
+
+/* Paper item in selection mode - add checkbox */
+body.ios.selection-mode .paper-item,
+body.ios-platform.selection-mode .paper-item {
+  padding-left: 48px;
+  position: relative;
+}
+
+body.ios.selection-mode .paper-item::before,
+body.ios-platform.selection-mode .paper-item::before {
+  content: '';
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--text-muted);
+  border-radius: 50%;
+  background: transparent;
+  box-sizing: border-box;
+}
+
+body.ios.selection-mode .paper-item.selected::before,
+body.ios-platform.selection-mode .paper-item.selected::before {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+body.ios.selection-mode .paper-item.selected::after,
+body.ios-platform.selection-mode .paper-item.selected::after {
+  content: '✓';
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  color: white;
+  font-size: 14px;
+  font-weight: bold;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Adjust paper list padding when in selection mode */
+body.ios.selection-mode #paper-list,
+body.ios-platform.selection-mode #paper-list {
+  padding-bottom: calc(70px + env(safe-area-inset-bottom));
+}
+
+/* Hide the Select button on desktop */
+#mobile-select-btn {
+  display: none;
+}
+
+body.ios #mobile-select-btn,
+body.ios-platform #mobile-select-btn {
+  display: block;
+}
+
+/* Paper swipe-to-delete (iOS only) */
+.paper-swipe-container {
+  position: relative;
+  overflow: hidden;
+}
+
+.paper-swipe-action {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--error);
+  color: white;
+  z-index: 0;
+}
+
+.paper-swipe-action.remove {
+  background: var(--warning);
+}
+
+.paper-swipe-action .swipe-action-icon {
+  font-size: 24px;
+}
+
+.paper-swipe-container .paper-item {
+  position: relative;
+  z-index: 1;
+  background: var(--bg-primary);
+  transition: transform 0.15s ease-out;
+}
+
+/* Ensure selected state shows properly inside swipe container */
+.paper-swipe-container .paper-item.selected {
+  background: var(--bg-selected);
+}
+
+.paper-swipe-container.swiping .paper-item {
+  transition: none;
+}
+
+.paper-swipe-container.swiped .paper-item {
+  transform: translateX(-80px);
+}
+
+/* Disable swipe in selection mode */
+body.selection-mode .paper-swipe-container .paper-item {
+  transform: none !important;
 }

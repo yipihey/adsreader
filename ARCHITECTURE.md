@@ -13,7 +13,7 @@ ADS Reader is a reference management application for astronomers that integrates
 ## Directory Structure
 
 ```
-ads-reader/
+adsreader/
 ├── src/
 │   ├── lib/                    # Core library (platform-agnostic)
 │   │   ├── ads-api/            # ADS API integration
@@ -265,11 +265,11 @@ import {
   // Types
   ReadStatus,
   RatingLabels
-} from 'ads-reader/lib';
+} from 'adsreader/lib';
 
 // Or import specific modules
-import { ADSApi } from 'ads-reader/lib/ads-api';
-import { parseBibtex } from 'ads-reader/lib/bibtex';
+import { ADSApi } from 'adsreader/lib/ads-api';
+import { parseBibtex } from 'adsreader/lib/bibtex';
 ```
 
 ### Type Definitions
@@ -338,5 +338,5 @@ const api = createADSApi({ ...mockAdapter, token: 'test' });
 
 1. **Web App**: Add a web platform adapter using localStorage + fetch
 2. **Android**: Add Capacitor Android support
-3. **npm Package**: Publish `src/lib/` as `@ads-reader/core`
+3. **npm Package**: Publish `src/lib/` as `@adsreader/core`
 4. **TypeScript**: Optionally add `.d.ts` files for type checking

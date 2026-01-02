@@ -36,16 +36,39 @@
         </div>
       </div>
       <button class="mobile-tb-btn" id="mobile-import-btn" title="Import files">+</button>
-      <button class="mobile-tb-btn" id="mobile-ads-btn" title="Search ADS">ADS 🔍</button>
-      <div class="mobile-download-dropdown">
-        <button class="mobile-tb-btn" id="mobile-download-btn" title="Download PDFs">⬇</button>
-        <div class="mobile-download-menu hidden" id="mobile-download-menu">
-          <!-- Populated dynamically based on ADS sources -->
-        </div>
-      </div>
       <button class="search-btn" id="mobile-search-btn" aria-label="Search">🔍</button>
+      <button class="mobile-tb-btn" id="mobile-select-btn" title="Select multiple">Select</button>
     </div>
-    <span class="top-bar-title" id="mobile-title">Papers</span>
+    <img src="logo.svg" alt="ADS Reader" class="top-bar-logo" id="mobile-title">
+  </div>
+
+  <!-- iOS Selection Mode Bar -->
+  <div class="mobile-selection-bar hidden" id="mobile-selection-bar">
+    <button class="selection-cancel-btn" id="selection-cancel-btn">Cancel</button>
+    <span class="selection-count" id="selection-count">Select Items</span>
+    <button class="selection-action-btn-top" id="selection-actions-btn">Actions</button>
+  </div>
+
+  <!-- iOS Selection Action Sheet -->
+  <div class="action-sheet-overlay hidden" id="action-sheet-overlay"></div>
+  <div class="action-sheet hidden" id="selection-action-sheet">
+    <div class="action-sheet-content">
+      <button class="action-sheet-btn" id="as-add-to-collection-btn">Add to Collection</button>
+      <button class="action-sheet-btn hidden" id="as-remove-from-collection-btn">Remove from Collection</button>
+      <button class="action-sheet-btn" id="as-sync-btn">Sync with ADS</button>
+      <button class="action-sheet-btn" id="as-bibtex-btn">Copy BibTeX</button>
+      <button class="action-sheet-btn" id="as-book-btn">Export as Book</button>
+      <button class="action-sheet-btn action-sheet-danger" id="as-delete-btn">Delete</button>
+    </div>
+    <button class="action-sheet-cancel" id="as-cancel-btn">Cancel</button>
+  </div>
+
+  <!-- iOS Collections Picker Action Sheet -->
+  <div class="action-sheet hidden" id="collections-action-sheet">
+    <div class="action-sheet-content" id="collections-sheet-content">
+      <!-- Populated dynamically -->
+    </div>
+    <button class="action-sheet-cancel" id="collections-cancel-btn">Cancel</button>
   </div>
 
   <!-- Mobile Drawer -->
@@ -125,7 +148,7 @@
   <!-- Loading Screen (shown while checking for existing library) -->
   <div id="loading-screen" class="screen">
     <div class="loading-container">
-      <div class="loading-icon">📚</div>
+      <img src="logo.svg" alt="ADS Reader" class="loading-icon">
       <h1>ADS Reader</h1>
       <p class="loading-text">Loading library...</p>
       <div class="loading-spinner"></div>
@@ -135,7 +158,7 @@
   <!-- Setup Screen -->
   <div id="setup-screen" class="screen hidden">
     <div class="setup-container">
-      <div class="setup-icon">📚</div>
+      <img src="logo.svg" alt="ADS Reader" class="setup-icon">
       <h1>Welcome to ADS Reader</h1>
       <p class="setup-subtitle">A scientific publication reader with NASA ADS integration</p>
 
@@ -380,10 +403,6 @@
           <div class="paper-list" id="paper-list">
             <!-- Paper items rendered dynamically -->
           </div>
-          <div class="paper-list-footer">
-            <button id="add-paper-btn" class="list-action-btn" title="Import PDF (Cmd+I)">+</button>
-            <button id="remove-paper-btn" class="list-action-btn" title="Remove Paper (Backspace)" disabled>−</button>
-          </div>
         </div>
 
         <!-- Resize handle between paper list and detail -->
@@ -423,12 +442,8 @@
               <div class="tab-pane hidden" id="tab-refs">
                 <div class="refs-toolbar hidden" id="refs-toolbar">
                   <span id="refs-count">0 references</span>
-                  <div class="refs-limit-controls">
-                    <input type="number" id="refs-limit-input" value="50" min="1" max="2000" title="Number of references to fetch">
-                    <button class="text-button" id="refs-load-more" title="Fetch references">Load</button>
-                    <button class="text-button" id="refs-load-all" title="Fetch all references">All</button>
-                  </div>
                   <div class="refs-actions">
+                    <button class="text-button" id="refs-load-all" title="Load all references from ADS">Load All</button>
                     <button class="text-button" id="refs-select-all">Select All</button>
                   </div>
                 </div>
@@ -706,6 +721,7 @@
             <button class="tab-btn" data-tab="ai" title="AI">AI</button>
             <button class="tab-btn" data-tab="library" title="Library">Lib</button>
             <button class="tab-btn sync-tab-btn" id="sync-tab-btn" title="Sync with ADS">⟳</button>
+            <button class="tab-btn mobile-only action-tab" id="download-tab-btn" title="Download/View PDF">⬇</button>
             <button class="tab-btn mobile-only action-tab" id="attach-tab-btn" title="Attach files">📎</button>
             <button class="tab-btn mobile-only action-tab" id="cite-tab-btn" title="Copy cite">❝</button>
             <button class="tab-btn mobile-only action-tab" id="ads-tab-btn" title="Open in ADS">↗</button>
@@ -731,6 +747,12 @@
           <span class="paper-title-bar" id="paper-title-bar" title="">Select a paper</span>
         </div>
         <div class="bottom-bar-right">
+          <div class="mobile-download-dropdown">
+            <button class="action-btn" id="mobile-download-btn" title="Download PDFs">⬇</button>
+            <div class="mobile-download-menu hidden" id="mobile-download-menu">
+              <!-- Populated dynamically based on ADS sources -->
+            </div>
+          </div>
           <select id="paper-rating-select" class="status-select rating-select" title="Rate paper (0-3 keys)">
             <option value="0">--</option>
             <option value="1">1 - Seminal</option>
@@ -977,6 +999,8 @@
     <div class="context-submenu hidden" id="ctx-collections-submenu"></div>
     <div class="context-menu-divider"></div>
     <div class="context-menu-item" id="ctx-remove-from-collection">Remove from Collection</div>
+    <div class="context-menu-divider"></div>
+    <div class="context-menu-item" id="ctx-export-book">Export as Book</div>
     <div class="context-menu-divider"></div>
     <div class="context-menu-item ctx-danger" id="ctx-delete-papers">Delete</div>
   </div>
@@ -1373,6 +1397,50 @@
         <button class="secondary-button" id="export-cancel-btn">Cancel</button>
         <button class="primary-button" id="export-share-btn">Share...</button>
         <button class="primary-button" id="export-save-btn">Export to File</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Export Book Modal -->
+  <div class="modal hidden" id="export-book-modal">
+    <div class="modal-content export-modal-content">
+      <div class="modal-header">
+        <h2>Export as Book</h2>
+        <button class="modal-close-btn" id="export-book-close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="export-name-section">
+          <label for="export-book-title">Book title:</label>
+          <input type="text" id="export-book-title" class="modal-input" placeholder="Selected Papers">
+        </div>
+
+        <p class="export-summary">
+          Merging <strong id="export-book-count">0</strong> papers into a single PDF
+        </p>
+
+        <div class="export-book-info">
+          <p class="export-book-note">
+            Papers with PDFs will be merged in order. Papers without PDFs will have
+            a summary page with abstract and BibTeX entry. A table of contents will
+            be added at the beginning.
+          </p>
+          <div class="export-book-stats">
+            <span id="export-book-with-pdf">0</span> with PDF,
+            <span id="export-book-without-pdf">0</span> without PDF
+          </div>
+        </div>
+
+        <div class="export-progress hidden" id="export-book-progress-section">
+          <p id="export-book-progress-text">Preparing export...</p>
+          <div class="progress-bar">
+            <div class="progress-fill" id="export-book-progress-fill"></div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="secondary-button" id="export-book-cancel-btn">Cancel</button>
+        <button class="primary-button" id="export-book-share-btn">Share...</button>
+        <button class="primary-button" id="export-book-save-btn">Export to File</button>
       </div>
     </div>
   </div>

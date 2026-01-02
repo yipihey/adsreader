@@ -171,6 +171,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   onShowExportModal: (callback) => ipcRenderer.on('show-export-modal', () => callback()),
   onShowImportModal: (callback) => ipcRenderer.on('show-import-modal', () => callback()),
+  onShowExportBookModal: (callback) => ipcRenderer.on('show-export-book-modal', () => callback()),
+
+  // Book Export
+  exportBook: (options) => ipcRenderer.invoke('export-book', options),
+  onBookExportProgress: (callback) => ipcRenderer.on('book-export-progress', (event, data) => callback(data)),
+  removeBookExportListeners: () => ipcRenderer.removeAllListeners('book-export-progress'),
 
   // ═══════════════════════════════════════════════════════════════════════════
   // COLLECTIONS
@@ -229,6 +235,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAnnotations: (paperId) => ipcRenderer.invoke('get-annotations', paperId),
   getAnnotationCountsBySource: (paperId) => ipcRenderer.invoke('get-annotation-counts-by-source', paperId),
   getDownloadedPdfSources: (paperId) => ipcRenderer.invoke('get-downloaded-pdf-sources', paperId),
+  getPdfAttachments: (paperId) => ipcRenderer.invoke('get-pdf-attachments', paperId),
   getPaperPdfPaths: (paperId) => ipcRenderer.invoke('get-paper-pdf-paths', paperId),
   deletePdf: (paperId, sourceType) => ipcRenderer.invoke('delete-pdf', paperId, sourceType),
   startFileDrag: (filePath) => ipcRenderer.send('start-file-drag', filePath),

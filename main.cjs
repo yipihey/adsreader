@@ -136,7 +136,7 @@ try {
 }
 
 // Keychain service name
-const KEYCHAIN_SERVICE = 'ads-reader';
+const KEYCHAIN_SERVICE = 'adsreader';
 
 // Initialize LLM services (will be configured from settings)
 let ollamaService = null;
@@ -3587,6 +3587,7 @@ ipcMain.handle('import-bibtex-from-path', async (event, filePath) => {
 // ===== Library Export/Import IPC Handlers =====
 
 const exportService = require('./src/main/export-service.cjs');
+const bookExportService = require('./src/main/book-export-service.cjs');
 
 ipcMain.handle('get-export-stats', () => {
   if (!dbInitialized) return null;
@@ -3637,6 +3638,115 @@ ipcMain.handle('export-library', async (event, options) => {
     return { success: false, error: error.message };
   }
 });
+
+// ===== Book Export IPC Handler =====
+
+ipcMain.handle('export-book', async (event, options) => {
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+
+  const libraryPath = store.get('libraryPath');
+  if (!libraryPath) return { success: false, error: 'No library selected' };
+
+  const { paperIds, bookTitle, lastPdfSources, forSharing } = options;
+
+  // Get paper data with PDF paths
+  const papers = [];
+  for (const id of paperIds) {
+    const paper = database.getPaper(id);
+    if (!paper) continue;
+
+    // Determine preferred PDF path
+    const pdfPath = getPreferredPdfPath(paper, lastPdfSources?.[id], libraryPath);
+    papers.push({
+      id: paper.id,
+      title: paper.title,
+      authors: paper.authors,
+      year: paper.year,
+      abstract: paper.abstract,
+      bibtex: paper.bibtex,
+      pdfPath
+    });
+  }
+
+  if (papers.length === 0) {
+    return { success: false, error: 'No valid papers to export' };
+  }
+
+  // Determine save path
+  const safeTitle = (bookTitle || 'Merged Papers').replace(/[^a-zA-Z0-9 _-]/g, '').trim();
+  let savePath;
+
+  if (forSharing) {
+    savePath = path.join(os.tmpdir(), `${safeTitle}.pdf`);
+  } else {
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: 'Export Book',
+      defaultPath: `${safeTitle}.pdf`,
+      filters: [{ name: 'PDF Document', extensions: ['pdf'] }]
+    });
+    if (result.canceled) return { success: false, canceled: true };
+    savePath = result.filePath;
+  }
+
+  try {
+    sendConsoleLog(`Exporting ${papers.length} papers as book...`, 'info');
+
+    const pdfBytes = await bookExportService.exportBook({
+      papers,
+      bookTitle,
+      onProgress: (phase, current, total) => {
+        mainWindow.webContents.send('book-export-progress', { phase, current, total });
+      }
+    });
+
+    fs.writeFileSync(savePath, pdfBytes);
+    sendConsoleLog(`Book exported to ${path.basename(savePath)}`, 'success');
+
+    return { success: true, path: savePath };
+  } catch (error) {
+    console.error('Book export failed:', error);
+    sendConsoleLog(`Book export failed: ${error.message}`, 'error');
+    return { success: false, error: error.message };
+  }
+});
+
+// Helper to get preferred PDF path for a paper
+function getPreferredPdfPath(paper, lastSource, libraryPath) {
+  const papersDir = path.join(libraryPath, 'papers');
+
+  // Check lastPdfSources preference
+  if (lastSource) {
+    if (lastSource.startsWith('ATTACHMENT:')) {
+      const filename = lastSource.substring('ATTACHMENT:'.length);
+      const attPath = path.join(papersDir, filename);
+      if (fs.existsSync(attPath)) return attPath;
+    } else if (lastSource === 'LEGACY' && paper.pdf_path) {
+      const legacyPath = path.join(libraryPath, paper.pdf_path);
+      if (fs.existsSync(legacyPath)) return legacyPath;
+    } else if (paper.bibcode) {
+      const baseFilename = paper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const sourcePath = path.join(papersDir, `${baseFilename}_${lastSource}.pdf`);
+      if (fs.existsSync(sourcePath)) return sourcePath;
+    }
+  }
+
+  // Try standard sources in order
+  if (paper.bibcode) {
+    const baseFilename = paper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
+    for (const source of ['EPRINT_PDF', 'PUB_PDF', 'ADS_PDF']) {
+      const sourcePath = path.join(papersDir, `${baseFilename}_${source}.pdf`);
+      if (fs.existsSync(sourcePath)) return sourcePath;
+    }
+  }
+
+  // Fallback to legacy pdf_path
+  if (paper.pdf_path) {
+    const legacyPath = path.join(libraryPath, paper.pdf_path);
+    if (fs.existsSync(legacyPath)) return legacyPath;
+  }
+
+  return null;
+}
 
 ipcMain.handle('preview-library-import', async (event, filePath) => {
   try {
@@ -4914,6 +5024,13 @@ ipcMain.handle('get-downloaded-pdf-sources', (event, paperId) => {
   return downloadedSources;
 });
 
+// Get PDF attachments for a paper (files attached by user)
+ipcMain.handle('get-pdf-attachments', (event, paperId) => {
+  // For now, return empty array - attachments are tracked via ATTACHED source type
+  // This stub exists for API compatibility with iOS
+  return [];
+});
+
 // Get full paths to all PDFs for a paper (for drag-and-drop)
 ipcMain.handle('get-paper-pdf-paths', (event, paperId) => {
   const libraryPath = store.get('libraryPath');
@@ -6099,6 +6216,16 @@ function createApplicationMenu() {
             const win = BrowserWindow.getFocusedWindow();
             if (win) {
               win.webContents.send('show-export-modal');
+            }
+          }
+        },
+        {
+          label: 'Export as Book...',
+          accelerator: 'CmdOrCtrl+Shift+B',
+          click: () => {
+            const win = BrowserWindow.getFocusedWindow();
+            if (win) {
+              win.webContents.send('show-export-book-modal');
             }
           }
         },

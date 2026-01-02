@@ -20,6 +20,7 @@ class ADSReader {
     this.currentMobileView = 'papers';
     this.currentTab = 'pdf'; // Current active tab
     this.previousTab = 'pdf'; // Previous tab (for returning after library selection)
+    this.isSelectionMode = false; // iOS multi-select mode
 
     // PDF state
     this.pdfDoc = null;
@@ -255,7 +256,8 @@ class ADSReader {
     document.getElementById('mobile-import-btn')?.addEventListener('click', () => {
       this.importFiles();
     });
-    document.getElementById('mobile-ads-btn')?.addEventListener('click', () => {
+    // Logo tap triggers ADS search on iOS
+    document.getElementById('mobile-title')?.addEventListener('click', () => {
       this.showAdsSearchModal();
     });
     document.getElementById('mobile-sort-btn')?.addEventListener('click', (e) => {
@@ -281,6 +283,58 @@ class ADSReader {
     // Close download menu when clicking elsewhere
     document.addEventListener('click', () => {
       document.getElementById('mobile-download-menu')?.classList.add('hidden');
+    });
+
+    // iOS Selection mode buttons
+    document.getElementById('mobile-select-btn')?.addEventListener('click', () => {
+      this.enterSelectionMode();
+    });
+    document.getElementById('selection-cancel-btn')?.addEventListener('click', () => {
+      this.exitSelectionMode();
+    });
+    document.getElementById('selection-actions-btn')?.addEventListener('click', () => {
+      this.showSelectionActionSheet();
+    });
+
+    // iOS Action sheet buttons
+    document.getElementById('action-sheet-overlay')?.addEventListener('click', () => {
+      this.hideSelectionActionSheet();
+      this.hideCollectionsActionSheet();
+    });
+    document.getElementById('as-cancel-btn')?.addEventListener('click', () => {
+      this.hideSelectionActionSheet();
+    });
+    document.getElementById('as-delete-btn')?.addEventListener('click', () => {
+      this.hideSelectionActionSheet();
+      this.removeSelectedPapers();
+      this.exitSelectionMode();
+    });
+    document.getElementById('as-sync-btn')?.addEventListener('click', () => {
+      this.hideSelectionActionSheet();
+      this.syncSelectedPapers();
+      this.exitSelectionMode();
+    });
+    document.getElementById('as-bibtex-btn')?.addEventListener('click', () => {
+      this.hideSelectionActionSheet();
+      this.exportSelectedBibtex();
+      this.exitSelectionMode();
+    });
+    document.getElementById('as-book-btn')?.addEventListener('click', () => {
+      this.hideSelectionActionSheet();
+      this.showExportBookModal();
+      // Don't exit - modal handles it
+    });
+    document.getElementById('as-add-to-collection-btn')?.addEventListener('click', () => {
+      this.hideSelectionActionSheet();
+      this.showCollectionsActionSheet();
+    });
+    document.getElementById('as-remove-from-collection-btn')?.addEventListener('click', () => {
+      this.hideSelectionActionSheet();
+      this.removeFromCurrentCollection();
+      this.exitSelectionMode();
+    });
+    document.getElementById('collections-cancel-btn')?.addEventListener('click', () => {
+      this.hideCollectionsActionSheet();
     });
 
     // Drawer overlay click to close
@@ -1824,51 +1878,126 @@ class ADSReader {
   async populateDownloadMenu(menuElement, papers) {
     menuElement.innerHTML = '<div class="download-loading">Loading...</div>';
 
-    // Collect available sources from all selected papers
-    const allSources = new Set();
-
-    for (const paper of papers) {
-      if (!paper.bibcode) continue;
-      try {
-        const result = await window.electronAPI.adsGetEsources(paper.bibcode);
-        if (result.success && result.data) {
-          if (result.data.arxiv) allSources.add('EPRINT_PDF');
-          if (result.data.publisher) allSources.add('PUB_PDF');
-          if (result.data.ads) allSources.add('ADS_PDF');
-        }
-      } catch (e) {
-        console.warn('[populateDownloadMenu] Failed to get esources:', e);
-      }
-    }
-
-    // Build menu items
     const sourceLabels = {
       'EPRINT_PDF': { icon: '📑', label: 'arXiv' },
       'PUB_PDF': { icon: '📰', label: 'Publisher' },
-      'ADS_PDF': { icon: '📜', label: 'ADS Scan' }
+      'ADS_PDF': { icon: '📜', label: 'ADS Scan' },
+      'ATTACHED': { icon: '📎', label: 'Attached' },
+      'LEGACY': { icon: '📄', label: 'PDF' }
     };
 
-    if (allSources.size === 0) {
-      menuElement.innerHTML = '<div class="download-option disabled">No sources available</div>';
-      return;
-    }
+    // For single paper, show both downloaded and available sources
+    if (papers.length === 1) {
+      const paper = papers[0];
+      const downloadedSources = await window.electronAPI.getDownloadedPdfSources(paper.id);
+      const pdfAttachments = await window.electronAPI.getPdfAttachments(paper.id) || [];
 
-    let html = '';
-    for (const source of ['EPRINT_PDF', 'PUB_PDF', 'ADS_PDF']) {
-      if (allSources.has(source)) {
-        const { icon, label } = sourceLabels[source];
-        html += `<div class="download-option" data-source="${source}">${icon} ${label}</div>`;
+      // Get available sources from ADS
+      const availableSources = new Set();
+      if (paper.bibcode) {
+        try {
+          const result = await window.electronAPI.adsGetEsources(paper.bibcode);
+          if (result.success && result.data) {
+            if (result.data.arxiv) availableSources.add('EPRINT_PDF');
+            if (result.data.publisher) availableSources.add('PUB_PDF');
+            if (result.data.ads) availableSources.add('ADS_PDF');
+          }
+        } catch (e) {
+          console.warn('[populateDownloadMenu] Failed to get esources:', e);
+        }
       }
-    }
-    menuElement.innerHTML = html;
 
-    // Attach click handlers
-    menuElement.querySelectorAll('.download-option').forEach(option => {
-      option.addEventListener('click', () => {
-        this.downloadPdfsForSelected(option.dataset.source);
-        menuElement.classList.add('hidden');
+      let html = '';
+
+      // Show downloaded sources first with checkmarks
+      for (const source of downloadedSources) {
+        const info = sourceLabels[source] || { icon: '📄', label: source };
+        html += `<div class="download-option downloaded" data-source="${source}" data-action="view">✓ ${info.icon} ${info.label}</div>`;
+        availableSources.delete(source); // Remove from available since already downloaded
+      }
+
+      // Show attachments with checkmarks
+      for (const att of pdfAttachments) {
+        html += `<div class="download-option downloaded" data-attachment="${att.filename}" data-action="view">✓ 📎 ${att.display_name || att.filename}</div>`;
+      }
+
+      // Show available sources for download (not yet downloaded)
+      for (const source of ['EPRINT_PDF', 'PUB_PDF', 'ADS_PDF']) {
+        if (availableSources.has(source)) {
+          const { icon, label } = sourceLabels[source];
+          html += `<div class="download-option" data-source="${source}" data-action="download">${icon} ${label}</div>`;
+        }
+      }
+
+      if (!html) {
+        menuElement.innerHTML = '<div class="download-option disabled">No sources available</div>';
+        return;
+      }
+      menuElement.innerHTML = html;
+
+      // Attach click handlers
+      menuElement.querySelectorAll('.download-option:not(.disabled)').forEach(option => {
+        option.addEventListener('click', async () => {
+          const action = option.dataset.action;
+          const source = option.dataset.source;
+          const attachment = option.dataset.attachment;
+
+          if (action === 'view') {
+            if (attachment) {
+              // View attachment
+              paper.pdf_path = `papers/${attachment}`;
+            } else if (source) {
+              // View downloaded source
+              const baseFilename = paper.bibcode ? paper.bibcode.replace(/\//g, '_') : `paper_${paper.id}`;
+              paper.pdf_path = source === 'LEGACY' ? `papers/${baseFilename}.pdf` : `papers/${baseFilename}_${source}.pdf`;
+            }
+            await this.loadPDF(paper);
+          } else if (action === 'download' && source) {
+            await this.downloadPdfsForSelected(source);
+          }
+          menuElement.classList.add('hidden');
+        });
       });
-    });
+    } else {
+      // Multiple papers - just show download options
+      const allSources = new Set();
+
+      for (const paper of papers) {
+        if (!paper.bibcode) continue;
+        try {
+          const result = await window.electronAPI.adsGetEsources(paper.bibcode);
+          if (result.success && result.data) {
+            if (result.data.arxiv) allSources.add('EPRINT_PDF');
+            if (result.data.publisher) allSources.add('PUB_PDF');
+            if (result.data.ads) allSources.add('ADS_PDF');
+          }
+        } catch (e) {
+          console.warn('[populateDownloadMenu] Failed to get esources:', e);
+        }
+      }
+
+      if (allSources.size === 0) {
+        menuElement.innerHTML = '<div class="download-option disabled">No sources available</div>';
+        return;
+      }
+
+      let html = '';
+      for (const source of ['EPRINT_PDF', 'PUB_PDF', 'ADS_PDF']) {
+        if (allSources.has(source)) {
+          const { icon, label } = sourceLabels[source];
+          html += `<div class="download-option" data-source="${source}">${icon} ${label}</div>`;
+        }
+      }
+      menuElement.innerHTML = html;
+
+      // Attach click handlers
+      menuElement.querySelectorAll('.download-option').forEach(option => {
+        option.addEventListener('click', () => {
+          this.downloadPdfsForSelected(option.dataset.source);
+          menuElement.classList.add('hidden');
+        });
+      });
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -2835,6 +2964,14 @@ class ADSReader {
     document.getElementById('sync-cancel-btn')?.addEventListener('click', () => this.cancelAdsSync());
 
     // Mobile action buttons (in tab bar)
+    document.getElementById('download-tab-btn')?.addEventListener('click', async () => {
+      const papers = this.getSelectedOrCurrentPapers();
+      if (papers.length === 0) {
+        this.showNotification('Select a paper first', 'warn');
+        return;
+      }
+      this.showDownloadActionSheet(papers);
+    });
     document.getElementById('attach-tab-btn')?.addEventListener('click', () => this.attachFiles());
     document.getElementById('cite-tab-btn')?.addEventListener('click', () => this.copyCite());
     document.getElementById('ads-tab-btn')?.addEventListener('click', () => this.openInADS());
@@ -2874,8 +3011,8 @@ class ADSReader {
     document.getElementById('cites-select-all')?.addEventListener('click', () => this.selectAllCites());
 
     // Refs/Cites limit controls
-    document.getElementById('refs-load-more')?.addEventListener('click', () => this.fetchRefsFromADS());
-    document.getElementById('refs-load-all')?.addEventListener('click', () => this.fetchRefsFromADS(2000));
+    // References - always fetch all (no limit dialog)
+    document.getElementById('refs-load-all')?.addEventListener('click', () => this.fetchRefsFromADS());
     document.getElementById('cites-load-more')?.addEventListener('click', () => this.fetchCitesFromADS());
     document.getElementById('cites-load-all')?.addEventListener('click', () => this.fetchCitesFromADS(2000));
 
@@ -2896,6 +3033,10 @@ class ADSReader {
     document.getElementById('ctx-open-publisher')?.addEventListener('click', () => this.openPublisherPDF());
     document.getElementById('ctx-sync-paper')?.addEventListener('click', () => this.syncSelectedPapers());
     document.getElementById('ctx-download-pdfs')?.addEventListener('click', () => this.batchDownloadPdfs());
+    document.getElementById('ctx-export-book')?.addEventListener('click', () => {
+      this.hideContextMenu();
+      this.showExportBookModal();
+    });
 
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => this.handleKeydown(e));
@@ -3031,6 +3172,12 @@ class ADSReader {
     document.getElementById('import-select-btn')?.addEventListener('click', () => this.selectImportFile());
     document.getElementById('import-confirm-btn')?.addEventListener('click', () => this.handleImport());
 
+    // Export Book modal
+    document.getElementById('export-book-close-btn')?.addEventListener('click', () => this.hideExportBookModal());
+    document.getElementById('export-book-cancel-btn')?.addEventListener('click', () => this.hideExportBookModal());
+    document.getElementById('export-book-save-btn')?.addEventListener('click', () => this.handleExportBook(false));
+    document.getElementById('export-book-share-btn')?.addEventListener('click', () => this.handleExportBook(true));
+
     // Export/import progress listeners
     window.electronAPI.onExportProgress?.((data) => this.updateExportProgress(data));
     window.electronAPI.onLibraryImportProgress?.((data) => this.updateLibraryImportProgress(data));
@@ -3038,6 +3185,7 @@ class ADSReader {
     // Menu-triggered export/import modals
     window.electronAPI.onShowExportModal?.(() => this.showExportModal());
     window.electronAPI.onShowImportModal?.(() => this.showImportModal());
+    window.electronAPI.onShowExportBookModal?.(() => this.showExportBookModal());
 
     // Window-wide BibTeX file drop handler
     document.body.addEventListener('dragover', (e) => {
@@ -4042,6 +4190,9 @@ class ADSReader {
 
   renderFullPaperList() {
     const listEl = document.getElementById('paper-list');
+    const inCollection = !!this.currentCollection;
+    const actionIcon = inCollection ? '✕' : '🗑';
+    const actionTitle = inCollection ? 'Remove from collection' : 'Delete paper';
 
     listEl.innerHTML = this.papers.map((paper, index) => {
       const pos = this.pdfPagePositions[paper.id];
@@ -4049,22 +4200,23 @@ class ADSReader {
       const progressPct = hasProgress ? Math.round((pos.page / pos.totalPages) * 100) : 0;
 
       return `
-      <div class="paper-item${this.selectedPapers.has(paper.id) ? ' selected' : ''}" data-id="${paper.id}" data-index="${index}" draggable="true">
-        <div class="paper-item-title">
-          <span class="paper-item-status ${paper.read_status}"></span>
-          ${this.escapeHtml(paper.title || 'Untitled')}
+      <div class="paper-swipe-container" data-id="${paper.id}" data-index="${index}">
+        <div class="paper-swipe-action ${inCollection ? 'remove' : 'delete'}" title="${actionTitle}">
+          <span class="swipe-action-icon">${actionIcon}</span>
         </div>
-        <div class="paper-item-meta">
-          <span class="paper-item-authors">${this.formatAuthors(paper.authors, true)}</span>
-          <span>${paper.year || ''}</span>
-          ${paper.citation_count > 0 ? `<span class="citation-count" title="${paper.citation_count} citations">🔗${paper.citation_count}</span>` : ''}
-          ${this.getRatingEmoji(paper.rating)}
-          ${hasProgress ? `<span class="reading-progress" title="Page ${pos.page}/${pos.totalPages} (${progressPct}%)">📖${progressPct}%</span>` : ''}
-          ${paper.is_indexed ? '<span class="indexed-indicator" title="Indexed for AI search">⚡</span>' : ''}
-          <span class="paper-item-actions">
-            <button class="paper-action-btn info-btn" data-paper-id="${paper.id}" title="Paper Info">ⓘ</button>
-            <button class="paper-action-btn pdf-btn ${this.getPdfButtonClass(paper)}" data-paper-id="${paper.id}" data-bibcode="${paper.bibcode || ''}" title="PDF">📄${paper.annotation_count > 0 ? `<span class="note-badge">${paper.annotation_count}</span>` : ''}</button>
-          </span>
+        <div class="paper-item${this.selectedPapers.has(paper.id) ? ' selected' : ''}" data-id="${paper.id}" data-index="${index}" draggable="true">
+          <div class="paper-item-title">
+            <span class="paper-item-status ${paper.read_status}"></span>
+            ${this.escapeHtml(paper.title || 'Untitled')}
+          </div>
+          <div class="paper-item-meta">
+            <span class="paper-item-authors">${this.formatAuthors(paper.authors, true)}</span>
+            <span>${paper.year || ''}</span>
+            ${paper.citation_count > 0 ? `<span class="citation-count" title="${paper.citation_count} citations">🔗${paper.citation_count}</span>` : ''}
+            ${this.getRatingEmoji(paper.rating)}
+            ${hasProgress ? `<span class="reading-progress" title="Page ${pos.page}/${pos.totalPages} (${progressPct}%)">📖${progressPct}%</span>` : ''}
+            ${paper.is_indexed ? '<span class="indexed-indicator" title="Indexed for AI search">⚡</span>' : ''}
+          </div>
         </div>
       </div>
     `}).join('');
@@ -4110,6 +4262,9 @@ class ADSReader {
 
     const scrollTop = listEl.scrollTop;
     const viewportHeight = listEl.clientHeight;
+    const inCollection = !!this.currentCollection;
+    const actionIcon = inCollection ? '✕' : '🗑';
+    const actionTitle = inCollection ? 'Remove from collection' : 'Delete paper';
 
     // Calculate visible range
     const startIndex = Math.max(0, Math.floor(scrollTop / this.PAPER_ITEM_HEIGHT) - this.VIRTUAL_BUFFER);
@@ -4128,24 +4283,25 @@ class ADSReader {
       const progressPct = hasProgress ? Math.round((pos.page / pos.totalPages) * 100) : 0;
 
       html += `
-        <div class="paper-item${this.selectedPapers.has(paper.id) ? ' selected' : ''}"
-             data-id="${paper.id}" data-index="${i}" draggable="true"
+        <div class="paper-swipe-container" data-id="${paper.id}" data-index="${i}"
              style="position: absolute; top: ${top}px; left: 0; right: 0; height: ${this.PAPER_ITEM_HEIGHT}px;">
-          <div class="paper-item-title">
-            <span class="paper-item-status ${paper.read_status}"></span>
-            ${this.escapeHtml(paper.title || 'Untitled')}
+          <div class="paper-swipe-action ${inCollection ? 'remove' : 'delete'}" title="${actionTitle}">
+            <span class="swipe-action-icon">${actionIcon}</span>
           </div>
-          <div class="paper-item-meta">
-            <span class="paper-item-authors">${this.formatAuthors(paper.authors, true)}</span>
-            <span>${paper.year || ''}</span>
-            ${paper.citation_count > 0 ? `<span class="citation-count" title="${paper.citation_count} citations">🔗${paper.citation_count}</span>` : ''}
-            ${this.getRatingEmoji(paper.rating)}
-            ${hasProgress ? `<span class="reading-progress" title="Page ${pos.page}/${pos.totalPages} (${progressPct}%)">📖${progressPct}%</span>` : ''}
-            ${paper.is_indexed ? '<span class="indexed-indicator" title="Indexed for AI search">⚡</span>' : ''}
-            <span class="paper-item-actions">
-              <button class="paper-action-btn info-btn" data-paper-id="${paper.id}" title="Paper Info">ⓘ</button>
-              <button class="paper-action-btn pdf-btn ${this.getPdfButtonClass(paper)}" data-paper-id="${paper.id}" data-bibcode="${paper.bibcode || ''}" title="PDF">📄${paper.annotation_count > 0 ? `<span class="note-badge">${paper.annotation_count}</span>` : ''}</button>
-            </span>
+          <div class="paper-item${this.selectedPapers.has(paper.id) ? ' selected' : ''}"
+               data-id="${paper.id}" data-index="${i}" draggable="true">
+            <div class="paper-item-title">
+              <span class="paper-item-status ${paper.read_status}"></span>
+              ${this.escapeHtml(paper.title || 'Untitled')}
+            </div>
+            <div class="paper-item-meta">
+              <span class="paper-item-authors">${this.formatAuthors(paper.authors, true)}</span>
+              <span>${paper.year || ''}</span>
+              ${paper.citation_count > 0 ? `<span class="citation-count" title="${paper.citation_count} citations">🔗${paper.citation_count}</span>` : ''}
+              ${this.getRatingEmoji(paper.rating)}
+              ${hasProgress ? `<span class="reading-progress" title="Page ${pos.page}/${pos.totalPages} (${progressPct}%)">📖${progressPct}%</span>` : ''}
+              ${paper.is_indexed ? '<span class="indexed-indicator" title="Indexed for AI search">⚡</span>' : ''}
+            </div>
           </div>
         </div>
       `;
@@ -4208,6 +4364,94 @@ class ADSReader {
       });
     });
 
+    // Swipe-to-delete handlers for iOS
+    if (this.isIOS) {
+      container.querySelectorAll('.paper-swipe-container').forEach(swipeContainer => {
+        let startX = 0;
+        let currentX = 0;
+        let isSwiping = false;
+        const threshold = 60; // Minimum swipe distance to trigger action
+        const paperItem = swipeContainer.querySelector('.paper-item');
+
+        swipeContainer.addEventListener('touchstart', (e) => {
+          // Don't swipe in selection mode
+          if (document.body.classList.contains('selection-mode')) return;
+
+          startX = e.touches[0].clientX;
+          isSwiping = false;
+          swipeContainer.classList.remove('swiped');
+        }, { passive: true });
+
+        swipeContainer.addEventListener('touchmove', (e) => {
+          if (document.body.classList.contains('selection-mode')) return;
+
+          currentX = e.touches[0].clientX;
+          const deltaX = currentX - startX;
+
+          // Only swipe left (negative deltaX)
+          if (deltaX < -10) {
+            isSwiping = true;
+            swipeContainer.classList.add('swiping');
+            const translateX = Math.max(-80, deltaX);
+            paperItem.style.transform = `translateX(${translateX}px)`;
+            e.preventDefault();
+          }
+        }, { passive: false });
+
+        swipeContainer.addEventListener('touchend', () => {
+          if (document.body.classList.contains('selection-mode')) return;
+
+          swipeContainer.classList.remove('swiping');
+          const deltaX = currentX - startX;
+
+          if (isSwiping && deltaX < -threshold) {
+            // Snap to open state
+            swipeContainer.classList.add('swiped');
+            paperItem.style.transform = '';
+          } else {
+            // Snap back closed
+            swipeContainer.classList.remove('swiped');
+            paperItem.style.transform = '';
+          }
+
+          isSwiping = false;
+          startX = 0;
+          currentX = 0;
+        }, { passive: true });
+
+        // Handle tap on delete action area - use touchend for iOS
+        const actionArea = swipeContainer.querySelector('.paper-swipe-action');
+        const handleDeleteTap = async (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          const paperId = parseInt(swipeContainer.dataset.id);
+
+          if (this.currentCollection) {
+            // Remove from collection
+            await window.electronAPI.removePaperFromCollection(paperId, this.currentCollection);
+            await this.loadPapersInCollection(this.currentCollection);
+            this.consoleLog('Paper removed from collection', 'success');
+          } else {
+            // Delete paper - use custom confirmation for iOS
+            this.showDeleteConfirmation(paperId, swipeContainer, paperItem);
+          }
+        };
+        actionArea?.addEventListener('touchend', handleDeleteTap);
+        actionArea?.addEventListener('click', handleDeleteTap);
+      });
+
+      // Close any open swipes when tapping elsewhere
+      container.addEventListener('touchstart', (e) => {
+        if (!e.target.closest('.paper-swipe-action')) {
+          container.querySelectorAll('.paper-swipe-container.swiped').forEach(s => {
+            s.classList.remove('swiped');
+            const item = s.querySelector('.paper-item');
+            if (item) item.style.transform = '';
+          });
+        }
+      }, { passive: true });
+    }
+
     // Add Info button handlers
     container.querySelectorAll('.info-btn').forEach(btn => {
       btn.addEventListener('click', async (e) => {
@@ -4246,6 +4490,18 @@ class ADSReader {
   }
 
   handlePaperClick(id, index, event) {
+    // iOS selection mode: toggle selection instead of opening paper
+    if (this.isSelectionMode && this.isIOS) {
+      if (this.selectedPapers.has(id)) {
+        this.selectedPapers.delete(id);
+      } else {
+        this.selectedPapers.add(id);
+      }
+      this.updatePaperListSelection();
+      this.updateSelectionCount();
+      return; // Don't open the paper
+    }
+
     const isMeta = event.metaKey || event.ctrlKey;
     const isShift = event.shiftKey;
 
@@ -4326,6 +4582,303 @@ class ADSReader {
     }
   }
 
+  // iOS Multi-Select Mode
+  enterSelectionMode() {
+    if (!this.isIOS) return;
+
+    this.isSelectionMode = true;
+    document.body.classList.add('selection-mode');
+
+    // Show selection UI, hide normal top bar
+    document.getElementById('mobile-top-bar')?.classList.add('hidden');
+    document.getElementById('mobile-selection-bar')?.classList.remove('hidden');
+
+    // Clear previous selection
+    this.selectedPapers.clear();
+    this.updatePaperListSelection();
+    this.updateSelectionCount();
+  }
+
+  exitSelectionMode() {
+    this.isSelectionMode = false;
+    document.body.classList.remove('selection-mode');
+
+    // Hide selection UI, show normal top bar
+    document.getElementById('mobile-top-bar')?.classList.remove('hidden');
+    document.getElementById('mobile-selection-bar')?.classList.add('hidden');
+    this.hideSelectionActionSheet();
+
+    // Clear selection
+    this.selectedPapers.clear();
+    this.updatePaperListSelection();
+  }
+
+  updateSelectionCount() {
+    const count = this.selectedPapers.size;
+    const countEl = document.getElementById('selection-count');
+    if (countEl) {
+      countEl.textContent = count === 0 ? 'Select Items' : `${count} selected`;
+    }
+  }
+
+  showSelectionActionSheet() {
+    if (this.selectedPapers.size === 0) {
+      this.showNotification('No papers selected', 'warn');
+      return;
+    }
+    // Show/hide "Remove from Collection" based on whether we're viewing a collection
+    const removeBtn = document.getElementById('as-remove-from-collection-btn');
+    if (removeBtn) {
+      if (this.currentCollection) {
+        removeBtn.classList.remove('hidden');
+      } else {
+        removeBtn.classList.add('hidden');
+      }
+    }
+    document.getElementById('action-sheet-overlay')?.classList.remove('hidden');
+    document.getElementById('selection-action-sheet')?.classList.remove('hidden');
+  }
+
+  hideSelectionActionSheet() {
+    document.getElementById('action-sheet-overlay')?.classList.add('hidden');
+    document.getElementById('selection-action-sheet')?.classList.add('hidden');
+  }
+
+  showCollectionsActionSheet() {
+    const content = document.getElementById('collections-sheet-content');
+    if (!content) return;
+
+    if (this.collections.length === 0) {
+      content.innerHTML = '<div class="action-sheet-btn" style="color: var(--text-muted);">No collections</div>';
+    } else {
+      content.innerHTML = this.collections.map(c =>
+        `<button class="action-sheet-btn" data-collection-id="${c.id}">${this.escapeHtml(c.name)}</button>`
+      ).join('');
+
+      // Add click handlers
+      content.querySelectorAll('.action-sheet-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const collectionId = parseInt(btn.dataset.collectionId);
+          this.hideCollectionsActionSheet();
+          this.addSelectedToCollection(collectionId);
+          this.exitSelectionMode();
+        });
+      });
+    }
+
+    // Keep overlay visible for this sheet
+    document.getElementById('action-sheet-overlay')?.classList.remove('hidden');
+    document.getElementById('collections-action-sheet')?.classList.remove('hidden');
+  }
+
+  hideCollectionsActionSheet() {
+    document.getElementById('collections-action-sheet')?.classList.add('hidden');
+    document.getElementById('action-sheet-overlay')?.classList.add('hidden');
+  }
+
+  async showDownloadActionSheet(papers) {
+    const overlay = document.getElementById('action-sheet-overlay');
+
+    // Create download action sheet dynamically
+    let sheet = document.getElementById('download-action-sheet');
+    if (!sheet) {
+      sheet = document.createElement('div');
+      sheet.id = 'download-action-sheet';
+      sheet.className = 'action-sheet';
+      document.body.appendChild(sheet);
+    }
+
+    sheet.innerHTML = '<div class="action-sheet-content"><div class="action-sheet-title">Loading sources...</div></div><button class="action-sheet-cancel" id="download-sheet-cancel">Cancel</button>';
+
+    overlay?.classList.remove('hidden');
+    sheet.classList.remove('hidden');
+
+    // Cancel button
+    document.getElementById('download-sheet-cancel')?.addEventListener('click', () => {
+      sheet.classList.add('hidden');
+      overlay?.classList.add('hidden');
+    });
+
+    // Populate with sources
+    const sourceLabels = {
+      'EPRINT_PDF': { icon: '📑', label: 'arXiv' },
+      'PUB_PDF': { icon: '📰', label: 'Publisher' },
+      'ADS_PDF': { icon: '📜', label: 'ADS Scan' },
+      'ATTACHED': { icon: '📎', label: 'Attached' },
+      'LEGACY': { icon: '📄', label: 'PDF' }
+    };
+
+    let html = '';
+
+    try {
+      if (papers.length === 1) {
+        const paper = papers[0];
+        let downloadedSources = [];
+        let pdfAttachments = [];
+
+        // Get downloaded sources
+        try {
+          downloadedSources = await window.electronAPI.getDownloadedPdfSources(paper.id) || [];
+        } catch (e) {
+          // Ignore errors - will just not show downloaded sources
+        }
+
+        // Get attachments
+        try {
+          pdfAttachments = await window.electronAPI.getPdfAttachments(paper.id) || [];
+        } catch (e) {
+          // Ignore errors - attachments may not be available on iOS
+        }
+
+        // Get available sources from ADS
+        const availableSources = new Set();
+        if (paper.bibcode) {
+          try {
+            const result = await window.electronAPI.adsGetEsources(paper.bibcode);
+            if (result && result.success && result.data) {
+              if (result.data.arxiv) availableSources.add('EPRINT_PDF');
+              if (result.data.publisher) availableSources.add('PUB_PDF');
+              if (result.data.ads) availableSources.add('ADS_PDF');
+            }
+          } catch (e) {
+            // Ignore errors - will just not show ADS sources
+          }
+        }
+
+        // Downloaded sources with checkmarks
+        for (const source of downloadedSources) {
+          const info = sourceLabels[source] || { icon: '📄', label: source };
+          html += `<button class="action-sheet-btn downloaded-source" data-source="${source}" data-action="view">✓ ${info.icon} ${info.label}</button>`;
+          availableSources.delete(source);
+        }
+
+        // Attachments
+        for (const att of pdfAttachments) {
+          html += `<button class="action-sheet-btn downloaded-source" data-attachment="${att.filename}" data-action="view">✓ 📎 ${att.display_name || att.filename}</button>`;
+        }
+
+        // Available for download
+        for (const source of ['EPRINT_PDF', 'PUB_PDF', 'ADS_PDF']) {
+          if (availableSources.has(source)) {
+            const { icon, label } = sourceLabels[source];
+            html += `<button class="action-sheet-btn" data-source="${source}" data-action="download">${icon} Download ${label}</button>`;
+          }
+        }
+
+        if (!html) {
+          html = '<div class="action-sheet-btn" style="color: var(--text-muted);">No sources available</div>';
+        }
+      } else {
+        // Multiple papers - just download options
+        html = `
+          <button class="action-sheet-btn" data-source="EPRINT_PDF" data-action="download">📑 Download arXiv</button>
+          <button class="action-sheet-btn" data-source="PUB_PDF" data-action="download">📰 Download Publisher</button>
+          <button class="action-sheet-btn" data-source="ADS_PDF" data-action="download">📜 Download ADS Scan</button>
+        `;
+      }
+    } catch (e) {
+      html = '<div class="action-sheet-btn" style="color: var(--text-muted);">Error loading sources</div>';
+    }
+
+    const content = sheet.querySelector('.action-sheet-content');
+    content.innerHTML = `<div class="action-sheet-title">${papers.length === 1 ? 'PDF Sources' : 'Download PDFs'}</div>${html}`;
+
+    // Add click handlers
+    content.querySelectorAll('.action-sheet-btn[data-action]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const action = btn.dataset.action;
+        const source = btn.dataset.source;
+        const attachment = btn.dataset.attachment;
+
+        sheet.classList.add('hidden');
+        overlay?.classList.add('hidden');
+
+        if (action === 'view' && papers.length === 1) {
+          const paper = papers[0];
+          if (attachment) {
+            paper.pdf_path = `papers/${attachment}`;
+          } else if (source) {
+            const baseFilename = paper.bibcode ? paper.bibcode.replace(/\//g, '_') : `paper_${paper.id}`;
+            paper.pdf_path = source === 'LEGACY' ? `papers/${baseFilename}.pdf` : `papers/${baseFilename}_${source}.pdf`;
+          }
+          await this.loadPDF(paper);
+        } else if (action === 'download' && source) {
+          await this.downloadPdfsForSelected(source);
+        }
+      });
+    });
+  }
+
+  showDeleteConfirmation(paperId, swipeContainer, paperItem) {
+    // Create a temporary action sheet for delete confirmation
+    const overlay = document.getElementById('action-sheet-overlay');
+    const paper = this.papers.find(p => p.id === paperId);
+    const title = paper ? (paper.title || 'Untitled').substring(0, 50) + (paper.title?.length > 50 ? '...' : '') : 'this paper';
+
+    // Create confirmation sheet dynamically
+    let sheet = document.getElementById('delete-confirm-sheet');
+    if (!sheet) {
+      sheet = document.createElement('div');
+      sheet.id = 'delete-confirm-sheet';
+      sheet.className = 'action-sheet';
+      document.body.appendChild(sheet);
+    }
+
+    sheet.innerHTML = `
+      <div class="action-sheet-content">
+        <div class="action-sheet-title">Delete "${title}"?</div>
+        <button class="action-sheet-btn action-sheet-danger" id="confirm-delete-btn">Delete Paper</button>
+      </div>
+      <button class="action-sheet-cancel" id="cancel-delete-btn">Cancel</button>
+    `;
+
+    // Show sheet
+    overlay?.classList.remove('hidden');
+    sheet.classList.remove('hidden');
+
+    // Handle delete
+    document.getElementById('confirm-delete-btn')?.addEventListener('click', async () => {
+      sheet.classList.add('hidden');
+      overlay?.classList.add('hidden');
+      await this.deletePapers([paperId]);
+    });
+
+    // Handle cancel
+    document.getElementById('cancel-delete-btn')?.addEventListener('click', () => {
+      sheet.classList.add('hidden');
+      overlay?.classList.add('hidden');
+      // Reset swipe state
+      swipeContainer?.classList.remove('swiped');
+      if (paperItem) paperItem.style.transform = '';
+    });
+  }
+
+  async exportSelectedBibtex() {
+    if (this.selectedPapers.size === 0) {
+      this.showNotification('No papers selected', 'warn');
+      return;
+    }
+
+    const papers = this.papers.filter(p => this.selectedPapers.has(p.id));
+    const bibtexEntries = papers
+      .filter(p => p.bibtex)
+      .map(p => p.bibtex)
+      .join('\n\n');
+
+    if (!bibtexEntries) {
+      this.showNotification('No BibTeX entries available', 'warn');
+      return;
+    }
+
+    // Copy to clipboard
+    try {
+      await navigator.clipboard.writeText(bibtexEntries);
+      this.showNotification(`Copied ${papers.length} BibTeX entries`, 'success');
+    } catch (e) {
+      this.showNotification('Failed to copy to clipboard', 'error');
+    }
+  }
+
   clearPaperDisplay() {
     this.selectedPaper = null;
     document.getElementById('viewer-wrapper').classList.add('hidden');
@@ -4373,6 +4926,14 @@ class ADSReader {
     deleteItem.textContent = this.selectedPapers.size > 1
       ? `Delete ${this.selectedPapers.size} Papers`
       : 'Delete';
+
+    // Update export book text based on selection count
+    const exportBookItem = document.getElementById('ctx-export-book');
+    if (exportBookItem) {
+      exportBookItem.textContent = this.selectedPapers.size > 1
+        ? `Export ${this.selectedPapers.size} Papers as Book`
+        : 'Export as Book';
+    }
 
     menu.classList.remove('hidden');
 
@@ -5071,8 +5632,8 @@ class ADSReader {
           await this.showNoPdfMessage(container, paper, true);
           return;
         }
-        document.body.classList.add('viewing-pdf');
-        // Pass binary data directly to PDF.js (blob URLs don't work in WKWebView)
+        // Note: viewing-pdf class is handled by switchToTab(), not here
+        // This allows PDF to load in background without showing back button
         loadingTask = pdfjsLib.getDocument({
           data: pdfData,
           cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',
@@ -5593,6 +6154,12 @@ class ADSReader {
     toolbar.classList.remove('hidden');
     document.getElementById('cites-count').textContent = `${cites.length} citations`;
 
+    // Hide limit controls if we already have all citations (less than default limit)
+    const citesLimitControls = document.querySelector('.cites-limit-controls');
+    if (citesLimitControls) {
+      citesLimitControls.style.display = cites.length < 50 ? 'none' : '';
+    }
+
     citesEl.innerHTML = cites.map((cite, index) => {
       const inLibrary = libraryBibcodes.has(cite.citing_bibcode);
       const isSelected = this.selectedCites.has(index);
@@ -5685,27 +6252,25 @@ class ADSReader {
   }
 
   /**
-   * Fetch references from ADS with custom limit
-   * @param {number} [limit] - Number of refs to fetch (uses input value if not provided)
+   * Fetch all references from ADS (no limit)
    */
-  async fetchRefsFromADS(limit = null) {
+  async fetchRefsFromADS() {
     if (!this.selectedPaper?.bibcode) {
       this.showNotification('Paper has no bibcode - cannot fetch from ADS', 'error');
       return;
     }
 
-    const limitInput = document.getElementById('refs-limit-input');
-    const actualLimit = limit || parseInt(limitInput.value) || 50;
-    const loadBtn = document.getElementById('refs-load-more');
     const loadAllBtn = document.getElementById('refs-load-all');
 
-    // Disable buttons during fetch
-    loadBtn.disabled = true;
-    loadAllBtn.disabled = true;
-    loadBtn.textContent = 'Loading...';
+    // Disable button during fetch
+    if (loadAllBtn) {
+      loadAllBtn.disabled = true;
+      loadAllBtn.textContent = 'Loading...';
+    }
 
     try {
-      const result = await window.electronAPI.adsGetReferences(this.selectedPaper.bibcode, { limit: actualLimit });
+      // Fetch all references (no limit)
+      const result = await window.electronAPI.adsGetReferences(this.selectedPaper.bibcode, { limit: 2000 });
       if (result.success && result.data) {
         // Store refs in database
         await window.electronAPI.addReferences(this.selectedPaper.id, result.data.map(r => ({
@@ -5723,9 +6288,10 @@ class ADSReader {
     } catch (err) {
       this.showNotification(`Error fetching references: ${err.message}`, 'error');
     } finally {
-      loadBtn.disabled = false;
-      loadAllBtn.disabled = false;
-      loadBtn.textContent = 'Load';
+      if (loadAllBtn) {
+        loadAllBtn.disabled = false;
+        loadAllBtn.textContent = 'Load All';
+      }
     }
   }
 
@@ -5995,12 +6561,7 @@ class ADSReader {
       }
     });
 
-    // Update top bar title
-    const titles = { papers: 'Papers', detail: 'Paper', pdf: 'PDF', notes: 'Notes', ai: 'AI' };
-    const titleEl = document.getElementById('mobile-title');
-    if (titleEl) {
-      titleEl.textContent = titles[view] || 'Papers';
-    }
+    // Logo is static now - no need to update title text
 
     // Remove viewing-pdf when going back to papers
     if (view === 'papers') {
@@ -6235,6 +6796,12 @@ class ADSReader {
     citesEl.innerHTML = html;
     toolbar.classList.remove('hidden');
     document.getElementById('cites-count').textContent = `${allCites.length} citations`;
+
+    // Hide limit controls if we already have all citations (less than default limit)
+    const citesLimitControls = document.querySelector('.cites-limit-controls');
+    if (citesLimitControls) {
+      citesLimitControls.style.display = allCites.length < 50 ? 'none' : '';
+    }
 
     // Add event listeners
     citesEl.querySelectorAll('.cite-item').forEach(item => {
@@ -11251,6 +11818,152 @@ Time: ${systemInfo.timestamp}`;
         progressFill.style.width = `${(data.current / data.total) * 100}%`;
       } else {
         progressText.textContent = data.phase;
+      }
+    }
+  }
+
+  // Export Book Modal
+  async showExportBookModal() {
+    if (this.selectedPapers.size === 0) {
+      this.showNotification('No papers selected', 'warn');
+      return;
+    }
+
+    const modal = document.getElementById('export-book-modal');
+    if (!modal) return;
+
+    // Reset state
+    document.getElementById('export-book-progress-section')?.classList.add('hidden');
+    document.getElementById('export-book-save-btn').disabled = false;
+    document.getElementById('export-book-share-btn').disabled = false;
+
+    // Count papers with and without PDFs
+    const selectedPapers = this.papers.filter(p => this.selectedPapers.has(p.id));
+    let withPdf = 0;
+    let withoutPdf = 0;
+
+    for (const paper of selectedPapers) {
+      // Check if paper has any PDF source
+      const downloadedSources = await window.electronAPI.getDownloadedPdfSources(paper.id);
+      const attachments = await window.electronAPI.getAttachments?.(paper.id) || [];
+      const pdfAttachments = attachments.filter(a => a.filename?.toLowerCase().endsWith('.pdf'));
+
+      if (downloadedSources.length > 0 || pdfAttachments.length > 0 || paper.pdf_path) {
+        withPdf++;
+      } else {
+        withoutPdf++;
+      }
+    }
+
+    // Update UI
+    document.getElementById('export-book-count').textContent = selectedPapers.length;
+    document.getElementById('export-book-with-pdf').textContent = withPdf;
+    document.getElementById('export-book-without-pdf').textContent = withoutPdf;
+
+    // Set default title
+    const titleInput = document.getElementById('export-book-title');
+    if (titleInput) {
+      if (selectedPapers.length === 1) {
+        titleInput.value = selectedPapers[0].title?.substring(0, 50) || 'Paper';
+      } else {
+        titleInput.value = 'Selected Papers';
+      }
+    }
+
+    modal.classList.remove('hidden');
+  }
+
+  hideExportBookModal() {
+    document.getElementById('export-book-modal')?.classList.add('hidden');
+    window.electronAPI.removeBookExportListeners?.();
+  }
+
+  async handleExportBook(forSharing = false) {
+    const bookTitle = document.getElementById('export-book-title')?.value?.trim() || 'Selected Papers';
+    const paperIds = Array.from(this.selectedPapers);
+
+    // Disable buttons
+    document.getElementById('export-book-save-btn').disabled = true;
+    document.getElementById('export-book-share-btn').disabled = true;
+
+    // Show progress
+    const progressSection = document.getElementById('export-book-progress-section');
+    progressSection?.classList.remove('hidden');
+    document.getElementById('export-book-progress-text').textContent = 'Preparing export...';
+    document.getElementById('export-book-progress-fill').style.width = '0%';
+
+    // Set up progress listener
+    window.electronAPI.onBookExportProgress((data) => {
+      this.updateBookExportProgress(data);
+    });
+
+    try {
+      const result = await window.electronAPI.exportBook({
+        paperIds,
+        bookTitle,
+        lastPdfSources: this.lastPdfSources,
+        forSharing
+      });
+
+      if (result.success) {
+        if (forSharing) {
+          // Share the file
+          document.getElementById('export-book-progress-text').textContent = 'Opening share sheet...';
+          document.getElementById('export-book-progress-fill').style.width = '100%';
+
+          const shareResult = await window.electronAPI.shareFileNative(result.path, bookTitle);
+          if (shareResult.method === 'native-picker') {
+            this.showNotification(shareResult.canceled ? 'Share cancelled' : 'Ready to share!',
+              shareResult.canceled ? 'info' : 'success');
+          } else {
+            this.showNotification('File revealed in Finder - right-click to share', 'success');
+          }
+        } else {
+          this.showNotification(`Book exported to ${result.path.split('/').pop()}`, 'success');
+        }
+        this.hideExportBookModal();
+      } else if (!result.canceled) {
+        this.showNotification(`Export failed: ${result.error}`, 'error');
+        this.resetExportBookModal();
+      } else {
+        this.resetExportBookModal();
+      }
+    } catch (error) {
+      this.showNotification(`Export failed: ${error.message}`, 'error');
+      this.resetExportBookModal();
+    }
+  }
+
+  resetExportBookModal() {
+    document.getElementById('export-book-save-btn').disabled = false;
+    document.getElementById('export-book-share-btn').disabled = false;
+    document.getElementById('export-book-progress-section')?.classList.add('hidden');
+  }
+
+  updateBookExportProgress(data) {
+    const progressText = document.getElementById('export-book-progress-text');
+    const progressFill = document.getElementById('export-book-progress-fill');
+
+    if (progressText && progressFill) {
+      switch (data.phase) {
+        case 'merging':
+          progressText.textContent = `Merging PDFs: ${data.current}/${data.total}`;
+          progressFill.style.width = `${(data.current / data.total) * 80}%`;
+          break;
+        case 'toc':
+          progressText.textContent = 'Creating table of contents...';
+          progressFill.style.width = '85%';
+          break;
+        case 'finalizing':
+          progressText.textContent = 'Finalizing book...';
+          progressFill.style.width = '92%';
+          break;
+        case 'saving':
+          progressText.textContent = 'Saving PDF...';
+          progressFill.style.width = '98%';
+          break;
+        default:
+          progressText.textContent = data.phase;
       }
     }
   }

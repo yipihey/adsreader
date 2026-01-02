@@ -4368,6 +4368,12 @@ Provide a clear, accessible explanation.`;
     }
   },
 
+  async getPdfAttachments(paperId) {
+    // Stub for iOS - attachments not yet supported
+    // Return empty array to avoid errors
+    return [];
+  },
+
   async deletePdf(paperId, sourceType) {
     try {
       const paper = MobileDB.getPaper(paperId);

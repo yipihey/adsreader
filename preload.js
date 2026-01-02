@@ -56,6 +56,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteLibrary: (options) => ipcRenderer.invoke('delete-library', options),
   getLibraryFileInfo: (libraryId) => ipcRenderer.invoke('get-library-file-info', libraryId),
   getCurrentLibraryId: () => ipcRenderer.invoke('get-current-library-id'),
+  setWindowTitle: (libraryName) => ipcRenderer.invoke('set-window-title', libraryName),
 
   // Library Migration
   checkMigrationNeeded: () => ipcRenderer.invoke('check-migration-needed'),
@@ -65,6 +66,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Library Conflict Detection
   checkLibraryConflicts: (libraryPath) => ipcRenderer.invoke('check-library-conflicts', libraryPath),
   resolveLibraryConflict: (options) => ipcRenderer.invoke('resolve-library-conflict', options),
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // APP INFO
+  // ═══════════════════════════════════════════════════════════════════════════
+  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+  getAppInfo: () => ipcRenderer.invoke('get-app-info'),
 
   // ═══════════════════════════════════════════════════════════════════════════
   // PDF SETTINGS

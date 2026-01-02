@@ -57,6 +57,7 @@
       <button class="action-sheet-btn" id="as-add-to-collection-btn">Add to Collection</button>
       <button class="action-sheet-btn hidden" id="as-remove-from-collection-btn">Remove from Collection</button>
       <button class="action-sheet-btn" id="as-sync-btn">Sync with ADS</button>
+      <button class="action-sheet-btn" id="as-read-status-btn">Mark as...</button>
       <button class="action-sheet-btn" id="as-bibtex-btn">Copy BibTeX</button>
       <button class="action-sheet-btn" id="as-book-btn">Export as Book</button>
       <button class="action-sheet-btn action-sheet-danger" id="as-delete-btn">Delete</button>
@@ -70,6 +71,16 @@
       <!-- Populated dynamically -->
     </div>
     <button class="action-sheet-cancel" id="collections-cancel-btn">Cancel</button>
+  </div>
+
+  <!-- iOS Read Status Picker Action Sheet -->
+  <div class="action-sheet hidden" id="read-status-action-sheet">
+    <div class="action-sheet-content">
+      <button class="action-sheet-btn" data-status="unread">○ Unread</button>
+      <button class="action-sheet-btn" data-status="reading">◐ Reading</button>
+      <button class="action-sheet-btn" data-status="read">● Read</button>
+    </div>
+    <button class="action-sheet-cancel" id="read-status-cancel-btn">Cancel</button>
   </div>
 
   <!-- Mobile Drawer -->
@@ -98,24 +109,39 @@
           <span class="drawer-section-arrow">▶</span>
         </div>
         <div class="drawer-shortcuts hidden" id="drawer-shortcuts">
+          <div class="shortcuts-section-label">Navigate Tabs (Capital)</div>
+          <div class="drawer-shortcuts-grid">
+            <span class="shortcut-key">P</span><span>PDF</span>
+            <span class="shortcut-key">A</span><span>Abstract</span>
+            <span class="shortcut-key">R</span><span>Refs</span>
+            <span class="shortcut-key">C</span><span>Cites</span>
+            <span class="shortcut-key">I</span><span>Info</span>
+            <span class="shortcut-key">L</span><span>Library</span>
+          </div>
+          <div class="shortcuts-section-label">Actions (lowercase)</div>
+          <div class="drawer-shortcuts-grid">
+            <span class="shortcut-key">w</span><span>Open in ADS</span>
+            <span class="shortcut-key">a</span><span>Add to library</span>
+            <span class="shortcut-key">s</span><span>Sync with ADS</span>
+            <span class="shortcut-key">r</span><span>Cycle read status</span>
+            <span class="shortcut-key">p</span><span>Open in Preview</span>
+            <span class="shortcut-key">n</span><span>Notes panel</span>
+            <span class="shortcut-key">f</span><span>Focus mode</span>
+            <span class="shortcut-key">m</span><span>Toggle menu</span>
+          </div>
+          <div class="shortcuts-section-label">Paper Status</div>
+          <div class="drawer-shortcuts-grid">
+            <span class="shortcut-key">1/2/3</span><span>Unread/Reading/Read</span>
+            <span class="shortcut-key">⇧1/2/3</span><span>Rating 1/2/3</span>
+            <span class="shortcut-key">0</span><span>Clear rating</span>
+          </div>
+          <div class="shortcuts-section-label">Navigation & Other</div>
           <div class="drawer-shortcuts-grid">
             <span class="shortcut-key">/</span><span>Search papers</span>
             <span class="shortcut-key">j/k</span><span>Next/Prev paper</span>
             <span class="shortcut-key">⌘A</span><span>Select all</span>
-            <span class="shortcut-key">⌫</span><span>Remove paper</span>
-            <span class="shortcut-key">s</span><span>Sync with ADS</span>
-            <span class="shortcut-key">a</span><span>Open in ADS</span>
-            <span class="shortcut-key">1/2/3</span><span>Unread/Reading/Read</span>
-            <span class="shortcut-key">⇧1/2/3</span><span>Rating 1/2/3</span>
-            <span class="shortcut-key">0</span><span>Clear rating</span>
-            <span class="shortcut-key">p</span><span>PDF tab</span>
-            <span class="shortcut-key">⇧P</span><span>Open in Preview</span>
+            <span class="shortcut-key">⌫</span><span>Delete paper</span>
             <span class="shortcut-key">+/-</span><span>Zoom PDF</span>
-            <span class="shortcut-key">r</span><span>Rotate page</span>
-            <span class="shortcut-key">f</span><span>Focus mode</span>
-            <span class="shortcut-key">n</span><span>Notes panel</span>
-            <span class="shortcut-key">⌘⇧N</span><span>Focus notes</span>
-            <span class="shortcut-key">m</span><span>Toggle menu</span>
             <span class="shortcut-key">Esc</span><span>Exit/Cancel</span>
           </div>
         </div>
@@ -317,16 +343,21 @@
           <span class="shortcut-key">/</span><span>Search</span>
           <span class="shortcut-key">j/k</span><span>Next/Prev</span>
           <span class="shortcut-key">s</span><span>Sync</span>
-          <span class="shortcut-key">a</span><span>Open ADS</span>
-          <span class="shortcut-key">p</span><span>PDF tab</span>
-          <span class="shortcut-key">⇧P</span><span>Open in Preview</span>
-          <span class="shortcut-key">c</span><span>Collections</span>
+          <span class="shortcut-key">w</span><span>Open ADS</span>
+          <span class="shortcut-key">a</span><span>Add to library</span>
+          <span class="shortcut-key">r</span><span>Read status</span>
+          <span class="shortcut-key">P</span><span>PDF tab</span>
+          <span class="shortcut-key">A</span><span>Abstract tab</span>
+          <span class="shortcut-key">R</span><span>Refs tab</span>
+          <span class="shortcut-key">C</span><span>Cites tab</span>
+          <span class="shortcut-key">I</span><span>Info tab</span>
+          <span class="shortcut-key">L</span><span>Library tab</span>
+          <span class="shortcut-key">p</span><span>Open Preview</span>
           <span class="shortcut-key">n</span><span>Notes Panel</span>
           <span class="shortcut-key">⌘⇧N</span><span>Focus Mode</span>
           <span class="shortcut-key">1-3</span><span>Read status</span>
           <span class="shortcut-key">⇧1-4</span><span>Rating</span>
           <span class="shortcut-key">+/-</span><span>Zoom</span>
-          <span class="shortcut-key">r</span><span>Rotate</span>
           <span class="shortcut-key">⌫</span><span>Delete</span>
           <span class="shortcut-key">⌘⌥I</span><span>Debug Console</span>
         </div>
@@ -733,6 +764,9 @@
               <optgroup label="Collections" id="filter-collections-group">
                 <!-- Dynamically populated -->
               </optgroup>
+              <optgroup label="Smart Searches" id="filter-smart-searches-group">
+                <!-- Dynamically populated -->
+              </optgroup>
             </select>
             <button class="tab-btn mobile-only" data-tab="papers" title="Papers">≡</button>
             <button class="tab-btn active" data-tab="pdf" title="PDF">▤</button>
@@ -1045,6 +1079,15 @@
     <div class="context-menu-item" id="ctx-open-publisher">Open Publisher PDF</div>
     <div class="context-menu-item" id="ctx-sync-paper">Sync with ADS</div>
     <div class="context-menu-item" id="ctx-download-pdfs">Download PDFs</div>
+    <div class="context-menu-item" id="ctx-read-status">
+      Read Status
+      <span class="submenu-arrow">▶</span>
+    </div>
+    <div class="context-submenu hidden" id="ctx-read-status-submenu">
+      <div class="context-menu-item" data-status="unread">○ Unread</div>
+      <div class="context-menu-item" data-status="reading">◐ Reading</div>
+      <div class="context-menu-item" data-status="read">● Read</div>
+    </div>
     <div class="context-menu-divider"></div>
     <div class="context-menu-item hidden" id="ctx-add-to-library">Add to Library</div>
     <div class="context-menu-item" id="ctx-add-to-collection">

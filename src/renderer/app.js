@@ -184,6 +184,10 @@ class ADSReader {
       const info = await window.electronAPI.getLibraryInfo(this.libraryPath);
       if (info) {
         this.updateLoadingText(`Loading ${info.name || 'library'}...`);
+        // Update window title with library name (macOS)
+        if (info.name && window.electronAPI.setWindowTitle) {
+          window.electronAPI.setWindowTitle(info.name);
+        }
         this.showMainScreen(info);
         await this.loadPapers();
         await this.loadCollections();
@@ -346,6 +350,23 @@ class ADSReader {
     });
     document.getElementById('collections-cancel-btn')?.addEventListener('click', () => {
       this.hideCollectionsActionSheet();
+    });
+
+    // Read status action sheet handlers
+    document.getElementById('as-read-status-btn')?.addEventListener('click', () => {
+      this.hideSelectionActionSheet();
+      this.showReadStatusActionSheet();
+    });
+    document.getElementById('read-status-cancel-btn')?.addEventListener('click', () => {
+      this.hideReadStatusActionSheet();
+    });
+    document.querySelectorAll('#read-status-action-sheet .action-sheet-btn[data-status]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const status = btn.dataset.status;
+        this.hideReadStatusActionSheet();
+        this.setSelectedPapersStatus(status);
+        this.exitSelectionMode();
+      });
     });
 
     // Drawer overlay click to close
@@ -534,11 +555,27 @@ class ADSReader {
     ).join('');
   }
 
+  renderFilterSmartSearches() {
+    const optgroup = document.getElementById('filter-smart-searches-group');
+    if (!optgroup) return;
+
+    if (!this.smartSearches || this.smartSearches.length === 0) {
+      optgroup.innerHTML = '';
+      return;
+    }
+
+    optgroup.innerHTML = this.smartSearches.map(search =>
+      `<option value="search:${search.id}">🔍 ${this.escapeHtml(search.name)}</option>`
+    ).join('');
+  }
+
   updateFilterSelect() {
     const select = document.getElementById('filter-select');
     if (!select) return;
 
-    if (this.currentCollection) {
+    if (this.currentSmartSearch) {
+      select.value = `search:${this.currentSmartSearch}`;
+    } else if (this.currentCollection) {
       select.value = `col:${this.currentCollection}`;
     } else {
       select.value = this.currentView || 'all';
@@ -554,6 +591,9 @@ class ADSReader {
       if (value.startsWith('col:')) {
         const collectionId = parseInt(value.substring(4));
         this.selectCollection(collectionId);
+      } else if (value.startsWith('search:')) {
+        const searchId = parseInt(value.substring(7));
+        this.selectSmartSearch(searchId);
       } else {
         this.setView(value);
       }
@@ -1240,6 +1280,13 @@ class ADSReader {
       if (result.success) {
         this.libraryPath = result.path;
         this.consoleLog(`Switched to library at ${result.path}`, 'success');
+
+        // Update window title with library name (macOS)
+        const libraries = await window.electronAPI.getAllLibraries();
+        const library = libraries.find(l => l.id === libraryId);
+        if (library && window.electronAPI.setWindowTitle) {
+          window.electronAPI.setWindowTitle(library.name);
+        }
 
         // Show main screen if we were on setup screen
         const setupScreen = document.getElementById('setup-screen');
@@ -2682,10 +2729,13 @@ class ADSReader {
         // Check if it's a smart search item
         if (collectionItemInTab.dataset.smartSearchId) {
           const searchId = parseInt(collectionItemInTab.dataset.smartSearchId);
+          // Close drawer first, then select
+          this.closeMobileDrawer();
           this.selectSmartSearch(searchId).then(() => {
             this.renderCollectionsTab();
-            this.switchTab(this.previousTab || 'pdf');
-            this.closeMobileDrawer();
+            // selectSmartSearch already switches to 'abs' tab on desktop
+          }).catch(err => {
+            console.error('Error selecting smart search:', err);
           });
           return;
         }
@@ -2693,6 +2743,8 @@ class ADSReader {
         const collectionId = collectionItemInTab.dataset.collectionId;
         // collectionId is empty string for "All Papers", or a number for collections
         const id = collectionId ? parseInt(collectionId) : null;
+        // Close drawer first, then select
+        this.closeMobileDrawer();
         this.selectCollection(id).then(() => {
           this.renderCollectionsTab(); // Update active state
           this.switchTab(this.previousTab || 'pdf');
@@ -3093,6 +3145,22 @@ class ADSReader {
     document.getElementById('ctx-add-to-library')?.addEventListener('click', () => {
       this.hideContextMenu();
       this.addSelectedPapersToLibrary();
+    });
+
+    // Read status submenu
+    document.getElementById('ctx-read-status')?.addEventListener('mouseenter', () => this.showReadStatusSubmenu());
+    document.getElementById('ctx-read-status')?.addEventListener('mouseleave', (e) => {
+      if (!e.relatedTarget?.closest('#ctx-read-status-submenu')) {
+        setTimeout(() => this.hideReadStatusSubmenu(), 100);
+      }
+    });
+    document.getElementById('ctx-read-status-submenu')?.addEventListener('mouseleave', () => this.hideReadStatusSubmenu());
+    document.querySelectorAll('#ctx-read-status-submenu .context-menu-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const status = item.dataset.status;
+        this.setSelectedPapersStatus(status);
+        this.hideContextMenu();
+      });
     });
 
     // Keyboard shortcuts
@@ -3625,6 +3693,10 @@ class ADSReader {
           this.toggleNotesPanel();
         }
         break;
+      case 'A':
+        // Shift+A: Switch to Abstract tab
+        this.switchTab('abstract');
+        break;
       case 'a':
         if (e.metaKey || e.ctrlKey) {
           // Cmd+A: Select all papers
@@ -3682,10 +3754,21 @@ class ADSReader {
       case '-':
         this.zoomPDF(-0.1);
         break;
+      case 'R':
+        // Shift+R: Switch to Refs tab
+        this.switchTab('refs');
+        break;
       case 'r':
         if (!e.metaKey && !e.ctrlKey) {
-          this.rotatePage();
+          // Cycle read status for selected paper(s)
+          if (this.selectedPaper && !this.currentSmartSearch) {
+            this.cycleReadStatus(this.selectedPaper.id);
+          }
         }
+        break;
+      case 'C':
+        // Shift+C: Switch to Cites tab
+        this.switchTab('cites');
         break;
       case 's':
         if (this.selectedPapers.size > 0) {
@@ -3693,14 +3776,24 @@ class ADSReader {
         }
         break;
       case 'p':
-        // Switch to PDF tab
+        // Open PDF with system viewer
+        this.openPdfWithSystemViewer();
+        break;
+      case 'P':
+        // Shift+P: Switch to PDF tab
         if (this.selectedPaper?.pdf_path) {
           this.switchTab('pdf');
         }
         break;
-      case 'P':
-        // Open PDF with system viewer (Shift+P)
-        this.openPdfWithSystemViewer();
+      case 'i':
+      case 'I':
+        // Switch to Info/BibTeX tab
+        this.switchTab('bibtex');
+        break;
+      case 'l':
+      case 'L':
+        // Switch to Library tab
+        this.switchTab('library');
         break;
       case 'Backspace':
       case 'Delete':
@@ -4252,6 +4345,7 @@ class ADSReader {
     this.smartSearches = await window.electronAPI.smartSearchList();
     this.renderSmartSearchesList();
     this.renderCollectionsTab(); // Update collections tab with smart searches
+    this.renderFilterSmartSearches(); // Update action bar dropdown
   }
 
   renderSmartSearchesList() {
@@ -4312,6 +4406,11 @@ class ADSReader {
     // Update UI
     this.updateNavActiveStates();
     this.renderSmartSearchesList();
+
+    // Switch to Abstract tab on desktop (smart search results don't have PDFs)
+    if (!this.isIOS) {
+      this.switchTab('abstract');
+    }
 
     // Show search toolbar
     const toolbar = document.getElementById('smart-search-toolbar');
@@ -5479,6 +5578,7 @@ class ADSReader {
   hideContextMenu() {
     document.getElementById('paper-context-menu').classList.add('hidden');
     this.hideCollectionsSubmenu();
+    this.hideReadStatusSubmenu();
   }
 
   showCollectionsSubmenu() {
@@ -5518,6 +5618,47 @@ class ADSReader {
 
   hideCollectionsSubmenu() {
     document.getElementById('ctx-collections-submenu').classList.add('hidden');
+  }
+
+  showReadStatusSubmenu() {
+    const submenu = document.getElementById('ctx-read-status-submenu');
+    const parentItem = document.getElementById('ctx-read-status');
+    if (!submenu || !parentItem) return;
+
+    const parentRect = parentItem.getBoundingClientRect();
+
+    // Position submenu
+    submenu.style.top = `${parentRect.top}px`;
+    submenu.style.left = `${parentRect.right + 2}px`;
+    submenu.classList.remove('hidden');
+
+    // Adjust if off screen
+    const rect = submenu.getBoundingClientRect();
+    if (rect.right > window.innerWidth) {
+      submenu.style.left = `${parentRect.left - rect.width - 2}px`;
+    }
+  }
+
+  hideReadStatusSubmenu() {
+    document.getElementById('ctx-read-status-submenu')?.classList.add('hidden');
+  }
+
+  showReadStatusActionSheet() {
+    document.getElementById('action-sheet-overlay')?.classList.remove('hidden');
+    document.getElementById('read-status-action-sheet')?.classList.remove('hidden');
+  }
+
+  hideReadStatusActionSheet() {
+    document.getElementById('read-status-action-sheet')?.classList.add('hidden');
+    document.getElementById('action-sheet-overlay')?.classList.add('hidden');
+  }
+
+  async setSelectedPapersStatus(status) {
+    for (const id of this.selectedPapers) {
+      await this.updatePaperStatus(id, status);
+    }
+    const statusLabels = { unread: 'Unread', reading: 'Reading', read: 'Read' };
+    this.showNotification(`Marked ${this.selectedPapers.size} paper(s) as ${statusLabels[status]}`, 'success');
   }
 
   async addSelectedToCollection(collectionId) {

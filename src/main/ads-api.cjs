@@ -211,8 +211,9 @@ async function getByArxiv(token, arxivId) {
 }
 
 // Get references (papers this paper cites)
+// Default to 500 to fetch all refs - papers rarely have more than this
 async function getReferences(token, bibcode, options = {}) {
-  const rows = options.rows || 50;
+  const rows = options.rows || 500;
   // Quote bibcode to handle special characters like ".."
   const result = await search(token, `references(bibcode:"${bibcode}")`, {
     fields: 'bibcode,title,author,year',
@@ -222,6 +223,7 @@ async function getReferences(token, bibcode, options = {}) {
 }
 
 // Get citations (papers that cite this paper)
+// Default to 50 - popular papers can have thousands of citations
 async function getCitations(token, bibcode, options = {}) {
   const rows = options.rows || 50;
   // Quote bibcode to handle special characters like ".."

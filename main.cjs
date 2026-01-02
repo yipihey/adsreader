@@ -4,6 +4,10 @@ const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
 const Store = require('electron-store');
+const { updateElectronApp, UpdateSourceType } = require('update-electron-app');
+
+// Auto-updater state
+let updateStatus = { checking: false, available: false, downloaded: false, error: null };
 
 // Handle EPIPE errors gracefully (occurs when terminal is closed but app keeps running)
 process.stdout.on('error', (err) => {
@@ -524,14 +528,15 @@ async function fetchAndApplyAdsMetadata(paperId, extractedMetadata = null) {
     });
 
     // Fetch refs/cites - wait for this to complete for reliable import
+    // Fetch all refs (500 limit), but only 50 cites (popular papers can have thousands)
     try {
       console.log(`Fetching references and citations for bibcode: ${adsData.bibcode}`);
       const [refs, cits] = await Promise.all([
-        adsApi.getReferences(token, adsData.bibcode).catch(e => {
+        adsApi.getReferences(token, adsData.bibcode, { rows: 500 }).catch(e => {
           console.error('Failed to fetch references:', e.message);
           return [];
         }),
-        adsApi.getCitations(token, adsData.bibcode).catch(e => {
+        adsApi.getCitations(token, adsData.bibcode, { rows: 50 }).catch(e => {
           console.error('Failed to fetch citations:', e.message);
           return [];
         })
@@ -587,6 +592,14 @@ async function runMigrationIfNeeded(libraryPath) {
     initializePaperFilesSystem(libraryPath);
   } catch (error) {
     console.error('[Migration] Migration failed:', error);
+  }
+}
+
+// Update window title with library name (macOS)
+function updateWindowTitle(libraryName) {
+  if (mainWindow && process.platform === 'darwin') {
+    const title = libraryName ? `${libraryName} — ADS Reader` : 'ADS Reader';
+    mainWindow.setTitle(title);
   }
 }
 
@@ -858,6 +871,13 @@ ipcMain.handle('set-pdf-zoom', (event, zoom) => {
   return true;
 });
 
+// App info (get-app-version already defined elsewhere)
+ipcMain.handle('get-app-info', () => ({
+  version: app.getVersion(),
+  name: app.getName(),
+  isPackaged: app.isPackaged
+}));
+
 // Sort preferences persistence
 ipcMain.handle('get-sort-preferences', () => {
   return {
@@ -1060,6 +1080,10 @@ ipcMain.handle('get-all-libraries', async () => {
   return getAllLibraries();
 });
 
+ipcMain.handle('set-window-title', (event, libraryName) => {
+  updateWindowTitle(libraryName);
+});
+
 ipcMain.handle('create-library', async (event, { name, location }) => {
   console.log('[create-library] Called with:', { name, location });
   try {
@@ -1184,6 +1208,9 @@ ipcMain.handle('switch-library', async (event, libraryId) => {
     // Update current library path in preferences
     store.set('libraryPath', library.fullPath);
     store.set('currentLibraryId', libraryId);
+
+    // Update window title with library name
+    updateWindowTitle(library.name);
 
     return { success: true, path: library.fullPath };
   } catch (error) {
@@ -1992,7 +2019,8 @@ ipcMain.handle('ads-get-references', async (event, bibcode, options = {}) => {
   if (!token) return { success: false, error: 'No ADS API token configured' };
 
   try {
-    const refs = await adsApi.getReferences(token, bibcode, { rows: options.limit || 50 });
+    // Fetch all references (no practical limit - papers rarely have >500 refs)
+    const refs = await adsApi.getReferences(token, bibcode, { rows: options.limit || 500 });
     return { success: true, data: refs };
   } catch (error) {
     return { success: false, error: error.message };
@@ -2004,6 +2032,7 @@ ipcMain.handle('ads-get-citations', async (event, bibcode, options = {}) => {
   if (!token) return { success: false, error: 'No ADS API token configured' };
 
   try {
+    // Limit citations to 50 (popular papers can have thousands)
     const cits = await adsApi.getCitations(token, bibcode, { rows: options.limit || 50 });
     return { success: true, data: cits };
   } catch (error) {
@@ -2606,13 +2635,14 @@ ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
       }, false);
 
       // Fetch refs/cites in parallel
+      // Fetch all refs (500 limit), but only 50 cites (popular papers can have thousands)
       sendConsoleLog(`[${bibcode}] Fetching refs & cites...`, 'info');
       const [refs, cits] = await Promise.all([
-        adsApi.getReferences(token, adsData.bibcode).catch(e => {
+        adsApi.getReferences(token, adsData.bibcode, { rows: 500 }).catch(e => {
           sendConsoleLog(`[${bibcode}] Refs fetch failed: ${e?.message || e}`, 'warn');
           return [];
         }),
-        adsApi.getCitations(token, adsData.bibcode).catch(e => {
+        adsApi.getCitations(token, adsData.bibcode, { rows: 50 }).catch(e => {
           sendConsoleLog(`[${bibcode}] Cites fetch failed: ${e?.message || e}`, 'warn');
           return [];
         })
@@ -3350,12 +3380,13 @@ ipcMain.handle('ads-import-papers', async (event, selectedPapers) => {
       });
 
       // Fetch and store references/citations
+      // Fetch all refs (500 limit), but only 50 cites (popular papers can have thousands)
       if (paper.bibcode) {
         try {
           sendConsoleLog(`[${paper.bibcode}] Fetching refs & cites...`, 'info');
           const [refs, cits] = await Promise.all([
-            adsApi.getReferences(token, paper.bibcode).catch(() => []),
-            adsApi.getCitations(token, paper.bibcode).catch(() => [])
+            adsApi.getReferences(token, paper.bibcode, { rows: 500 }).catch(() => []),
+            adsApi.getCitations(token, paper.bibcode, { rows: 50 }).catch(() => [])
           ]);
 
           sendConsoleLog(`[${paper.bibcode}] Found ${refs.length} refs, ${cits.length} cites`, 'success');
@@ -4774,10 +4805,11 @@ ipcMain.handle('apply-ads-metadata', async (event, paperId, adsDoc) => {
     });
 
     // Fetch refs/cites in background
+    // Fetch all refs (500 limit), but only 50 cites (popular papers can have thousands)
     (async () => {
       try {
-        const refs = await adsApi.getReferences(token, adsDoc.bibcode);
-        const cits = await adsApi.getCitations(token, adsDoc.bibcode);
+        const refs = await adsApi.getReferences(token, adsDoc.bibcode, { rows: 500 });
+        const cits = await adsApi.getCitations(token, adsDoc.bibcode, { rows: 50 });
 
         database.addReferences(paperId, refs.map(r => ({
           bibcode: r.bibcode,
@@ -4876,14 +4908,15 @@ ipcMain.handle('import-single-from-ads', async (event, adsDoc) => {
     });
 
     // Fetch and store references/citations
+    // Fetch all refs (500 limit), but only 50 cites (popular papers can have thousands)
     if (adsDoc.bibcode) {
       try {
         sendConsoleLog(`[${paper.bibcode}] Fetching refs & cites...`, 'info');
         const [refs, cits] = await Promise.all([
-          adsApi.getReferences(token, adsDoc.bibcode).catch(e => {
+          adsApi.getReferences(token, adsDoc.bibcode, { rows: 500 }).catch(e => {
             return [];
           }),
-          adsApi.getCitations(token, adsDoc.bibcode).catch(e => {
+          adsApi.getCitations(token, adsDoc.bibcode, { rows: 50 }).catch(e => {
             return [];
           })
         ]);
@@ -6492,6 +6525,34 @@ function createApplicationMenu() {
       label: app.name,
       submenu: [
         { role: 'about' },
+        {
+          label: 'Check for Updates...',
+          click: async () => {
+            const win = BrowserWindow.getFocusedWindow();
+            if (win) {
+              win.webContents.send('check-for-updates-clicked');
+            }
+            // For packaged apps, trigger update check
+            if (app.isPackaged) {
+              try {
+                const { autoUpdater } = require('electron');
+                autoUpdater.checkForUpdates();
+              } catch (err) {
+                // update-electron-app handles this internally
+                console.log('Manual update check requested');
+              }
+            } else {
+              // In development, show a dialog
+              dialog.showMessageBox({
+                type: 'info',
+                title: 'Check for Updates',
+                message: 'Auto-updates are only available in the packaged app.',
+                detail: `Current version: ${app.getVersion()}\n\nTo test updates, build and package the app first.`,
+                buttons: ['OK']
+              });
+            }
+          }
+        },
         { type: 'separator' },
         { role: 'services' },
         { type: 'separator' },
@@ -6607,6 +6668,29 @@ function createApplicationMenu() {
     {
       role: 'help',
       submenu: [
+        // Check for Updates (Windows/Linux only - macOS has it in app menu)
+        ...(!isMac ? [{
+          label: 'Check for Updates...',
+          click: async () => {
+            if (app.isPackaged) {
+              try {
+                const { autoUpdater } = require('electron');
+                autoUpdater.checkForUpdates();
+              } catch (err) {
+                console.log('Manual update check requested');
+              }
+            } else {
+              dialog.showMessageBox({
+                type: 'info',
+                title: 'Check for Updates',
+                message: 'Auto-updates are only available in the packaged app.',
+                detail: `Current version: ${app.getVersion()}\n\nTo test updates, build and package the app first.`,
+                buttons: ['OK']
+              });
+            }
+          }
+        },
+        { type: 'separator' }] : []),
         {
           label: 'Send Feedback',
           accelerator: 'CmdOrCtrl+Shift+F',
@@ -6621,7 +6705,7 @@ function createApplicationMenu() {
         {
           label: 'ADS Reader on GitHub',
           click: async () => {
-            await shell.openExternal('https://github.com');
+            await shell.openExternal('https://github.com/yipihey/adsreader');
           }
         },
         {
@@ -6629,7 +6713,23 @@ function createApplicationMenu() {
           click: async () => {
             await shell.openExternal('https://ui.adsabs.harvard.edu');
           }
-        }
+        },
+        // About (Windows/Linux only - macOS has native about panel)
+        ...(!isMac ? [
+          { type: 'separator' },
+          {
+            label: 'About ADS Reader',
+            click: async () => {
+              dialog.showMessageBox({
+                type: 'info',
+                title: 'About ADS Reader',
+                message: 'ADS Reader',
+                detail: `Version ${app.getVersion()}\n\n© 2024 ADS Reader\n\nNASA ADS Integration • PDF.js Viewer\n\nBuilt with Electron`,
+                buttons: ['OK']
+              });
+            }
+          }
+        ] : [])
       ]
     }
   ];
@@ -6640,6 +6740,35 @@ function createApplicationMenu() {
 
 // App lifecycle
 app.whenReady().then(() => {
+  // Configure About panel (macOS native)
+  app.setAboutPanelOptions({
+    applicationName: 'ADS Reader',
+    applicationVersion: app.getVersion(),
+    version: '', // Build number if available
+    copyright: '© 2024 ADS Reader',
+    credits: 'NASA ADS Integration • PDF.js Viewer\n\nBuilt with Electron',
+    website: 'https://github.com/yipihey/adsreader',
+    iconPath: path.join(__dirname, 'assets', 'icon.png')
+  });
+
+  // Initialize auto-updater (only in packaged app)
+  if (app.isPackaged) {
+    try {
+      updateElectronApp({
+        updateInterval: '1 hour',
+        notifyUser: true,
+        logger: {
+          log: (...args) => console.log('[AutoUpdater]', ...args),
+          warn: (...args) => console.warn('[AutoUpdater]', ...args),
+          error: (...args) => console.error('[AutoUpdater]', ...args)
+        }
+      });
+      console.log('Auto-updater initialized');
+    } catch (err) {
+      console.error('Failed to initialize auto-updater:', err);
+    }
+  }
+
   createApplicationMenu();
   createWindow();
 

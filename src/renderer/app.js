@@ -246,6 +246,11 @@ class ADSReader {
       this.toggleMobileSearch();
     });
 
+    // Mobile back button - return to papers list
+    document.getElementById('mobile-back-btn')?.addEventListener('click', () => {
+      this.showMobileView('papers');
+    });
+
     // Mobile toolbar buttons - wire to same actions as desktop
     document.getElementById('mobile-import-btn')?.addEventListener('click', () => {
       this.importFiles();
@@ -5862,6 +5867,9 @@ class ADSReader {
     // Update body class for CSS
     document.body.classList.toggle('showing-detail', view === 'detail');
     document.body.classList.toggle('showing-papers', view === 'papers');
+
+    // Update top bar state for back button visibility
+    document.getElementById('mobile-top-bar')?.classList.toggle('showing-detail', view === 'detail');
 
     // Update Papers tab active state
     document.querySelectorAll('.tab-btn').forEach(btn => {

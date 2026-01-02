@@ -2816,6 +2816,11 @@ body.ios-platform .pdf-container {
     display: none;
   }
 
+  /* Hide actions row when in detail/PDF view */
+  body.showing-detail .bottom-bar-right {
+    display: none;
+  }
+
   /* Compact action buttons */
   .bottom-bar-right .action-btn {
     flex: 1;
@@ -6555,6 +6560,34 @@ body.ios-platform .sidebar {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.mobile-top-bar .back-btn {
+  background: none;
+  border: none;
+  font-size: 22px;
+  padding: 4px;
+  cursor: pointer;
+  color: var(--text-primary);
+  min-width: 32px;
+  min-height: 32px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Show back button and hide hamburger when in detail view */
+.mobile-top-bar.showing-detail .hamburger-btn {
+  display: none;
+}
+
+.mobile-top-bar.showing-detail .back-btn {
+  display: flex;
+}
+
+/* Hide toolbar buttons when in detail view */
+.mobile-top-bar.showing-detail .mobile-toolbar-btns {
+  display: none;
 }
 
 .mobile-top-bar .top-bar-title {

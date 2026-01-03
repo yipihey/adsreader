@@ -264,8 +264,6 @@ function updatePaper(id, updates, save = true) {
 }
 
 function deletePaper(id, save = true) {
-  db.run(`DELETE FROM refs WHERE paper_id = ?`, [id]);
-  db.run(`DELETE FROM citations WHERE paper_id = ?`, [id]);
   db.run(`DELETE FROM paper_collections WHERE paper_id = ?`, [id]);
   db.run(`DELETE FROM papers WHERE id = ?`, [id]);
   if (save) saveDatabase();
@@ -603,80 +601,6 @@ function parsePaperRow(row) {
     authors: row.authors ? JSON.parse(row.authors) : [],
     keywords: row.keywords ? JSON.parse(row.keywords) : []
   };
-}
-
-// References and Citations
-
-function addReferences(paperId, refs, save = true) {
-  // Clear existing references first to avoid duplicates
-  db.run(`DELETE FROM refs WHERE paper_id = ?`, [paperId]);
-
-  if (!refs || refs.length === 0) {
-    if (save) saveDatabase();
-    return;
-  }
-
-  const stmt = db.prepare(`
-    INSERT INTO refs (paper_id, ref_bibcode, ref_title, ref_authors, ref_year)
-    VALUES (?, ?, ?, ?, ?)
-  `);
-
-  for (const ref of refs) {
-    if (ref.bibcode) {  // Only add if bibcode exists
-      // sql.js requires null instead of undefined
-      stmt.run([paperId, ref.bibcode, ref.title ?? null, ref.authors ?? null, ref.year ?? null]);
-    }
-  }
-  stmt.free();
-  if (save) saveDatabase();
-}
-
-function addCitations(paperId, citations, save = true) {
-  // Clear existing citations first to avoid duplicates
-  db.run(`DELETE FROM citations WHERE paper_id = ?`, [paperId]);
-
-  if (!citations || citations.length === 0) {
-    if (save) saveDatabase();
-    return;
-  }
-
-  const stmt = db.prepare(`
-    INSERT INTO citations (paper_id, citing_bibcode, citing_title, citing_authors, citing_year)
-    VALUES (?, ?, ?, ?, ?)
-  `);
-
-  for (const cit of citations) {
-    if (cit.bibcode) {  // Only add if bibcode exists
-      // sql.js requires null instead of undefined
-      stmt.run([paperId, cit.bibcode, cit.title ?? null, cit.authors ?? null, cit.year ?? null]);
-    }
-  }
-  stmt.free();
-  if (save) saveDatabase();
-}
-
-function getReferences(paperId) {
-  const results = db.exec(`SELECT * FROM refs WHERE paper_id = ?`, [paperId]);
-  if (results.length === 0) return [];
-
-  const columns = results[0].columns;
-  return results[0].values.map(row => {
-    const obj = {};
-    columns.forEach((col, i) => obj[col] = row[i]);
-    return obj;
-  });
-}
-
-function getCitations(paperId) {
-  const results = db.exec(`SELECT * FROM citations WHERE paper_id = ?`, [paperId]);
-  if (results.length === 0) return [];
-
-  const columns = results[0].columns;
-  return results[0].values.map(row => {
-    const obj = {};
-    columns.forEach((col, i) => obj[col] = row[i]);
-    return obj;
-  });
 }
 
 // Collections
@@ -1597,10 +1521,6 @@ module.exports = {
   getPaperByBibcode,
   getAllPapers,
   searchPapersFullText,
-  addReferences,
-  addCitations,
-  getReferences,
-  getCitations,
   createCollection,
   getCollections,
   addPaperToCollection,

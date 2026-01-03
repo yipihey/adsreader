@@ -123,8 +123,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setPdfPriority: (priority) => ipcRenderer.invoke('set-pdf-priority', priority),
   adsSearch: (query, options) => ipcRenderer.invoke('ads-search', query, options),
   adsLookup: (identifier, type) => ipcRenderer.invoke('ads-lookup', identifier, type),
-  adsGetReferences: (bibcode, options) => ipcRenderer.invoke('ads-get-references', bibcode, options),
-  adsGetCitations: (bibcode, options) => ipcRenderer.invoke('ads-get-citations', bibcode, options),
   adsGetEsources: (bibcode) => ipcRenderer.invoke('ads-get-esources', bibcode),
   downloadPdfFromSource: (paperId, sourceType) => ipcRenderer.invoke('download-pdf-from-source', paperId, sourceType),
   adsSyncPapers: (paperIds) => ipcRenderer.invoke('ads-sync-papers', paperIds),
@@ -190,14 +188,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   addPaperToCollection: (paperId, collectionId) => ipcRenderer.invoke('add-paper-to-collection', paperId, collectionId),
   removePaperFromCollection: (paperId, collectionId) => ipcRenderer.invoke('remove-paper-from-collection', paperId, collectionId),
   getPapersInCollection: (collectionId) => ipcRenderer.invoke('get-papers-in-collection', collectionId),
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // REFERENCES & CITATIONS
-  // ═══════════════════════════════════════════════════════════════════════════
-  getReferences: (paperId) => ipcRenderer.invoke('get-references', paperId),
-  getCitations: (paperId) => ipcRenderer.invoke('get-citations', paperId),
-  addReferences: (paperId, refs) => ipcRenderer.invoke('add-references', paperId, refs),
-  addCitations: (paperId, cites) => ipcRenderer.invoke('add-citations', paperId, cites),
 
   // ═══════════════════════════════════════════════════════════════════════════
   // LLM / AI

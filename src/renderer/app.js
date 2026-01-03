@@ -37,11 +37,12 @@ class ADSReader {
     this.currentAdsNLQuery = null;    // Natural language query that generated currentAdsQuery
     this.adsSearchResultCount = 0;    // Total results from ADS
 
-    // Refs/Cites import state
-    this.currentRefs = [];
-    this.currentCites = [];
-    this.selectedRefs = new Set();
-    this.selectedCites = new Set();
+    // Refs/Cites query mode (unified approach)
+    this.refsQueryBibcode = null;      // Bibcode we're viewing refs for
+    this.citesQueryBibcode = null;     // Bibcode we're viewing cites for
+    this.refsQuerySourcePaper = null;  // Paper we came from (for back navigation)
+    this.refsCache = new Map();        // bibcode -> {papers: [], count: n}
+    this.citesCache = new Map();       // bibcode -> {papers: [], count: n}
 
     // LLM/AI state
     this.llmConnected = false;
@@ -2596,7 +2597,19 @@ class ADSReader {
       // Handle tab buttons
       const tabBtn = target.closest('.tab-btn');
       if (tabBtn && tabBtn.dataset.tab) {
-        this.switchTab(tabBtn.dataset.tab);
+        const tabName = tabBtn.dataset.tab;
+
+        // Intercept refs/cites tabs to execute query instead of switching
+        if ((tabName === 'refs' || tabName === 'cites') && this.selectedPaper && this.selectedPaper.bibcode) {
+          if (tabName === 'refs') {
+            this.executeRefsQuery(this.selectedPaper.bibcode, this.selectedPaper);
+          } else {
+            this.executeCitesQuery(this.selectedPaper.bibcode, this.selectedPaper);
+          }
+          return; // Don't proceed with normal tab switch
+        }
+
+        this.switchTab(tabName);
       }
 
       // Handle provider tabs in AI settings modal (iOS compatibility)
@@ -3084,16 +3097,6 @@ class ADSReader {
 
     // ADS shortcut buttons are handled by the delegated click handler (lines ~1270-1292)
     // for iOS compatibility - no duplicate listeners needed here
-
-    // Refs/Cites selection controls
-    document.getElementById('refs-select-all')?.addEventListener('click', () => this.selectAllRefs());
-    document.getElementById('cites-select-all')?.addEventListener('click', () => this.selectAllCites());
-
-    // Refs/Cites limit controls
-    // References - always fetch all (no limit dialog)
-    document.getElementById('refs-load-all')?.addEventListener('click', () => this.fetchRefsFromADS());
-    document.getElementById('cites-load-more')?.addEventListener('click', () => this.fetchCitesFromADS());
-    document.getElementById('cites-load-all')?.addEventListener('click', () => this.fetchCitesFromADS(2000));
 
     // Context menu
     document.getElementById('paper-list')?.addEventListener('contextmenu', (e) => this.showContextMenu(e));
@@ -3687,38 +3690,14 @@ class ADSReader {
           // Cmd+A: Select all papers
           e.preventDefault();
           this.selectAllPapers();
-        } else {
-          // Check if on refs/cites tab with selections
-          const activeTabA = document.querySelector('.tab-btn.active')?.dataset.tab;
-          if (activeTabA === 'refs' && this.selectedRefs?.size > 0) {
-            this.importSelectedRefs();
-          } else if (activeTabA === 'cites' && this.selectedCites?.size > 0) {
-            this.importSelectedCites();
-          } else if ((this.currentSmartSearch || this.isAdsSearchActive) && this.selectedPapers.size > 0) {
-            // 'a' adds selected papers to library (from smart search or ADS search)
-            this.addSelectedPapersToLibrary();
-          }
+        } else if ((this.currentSmartSearch || this.isAdsSearchActive) && this.selectedPapers.size > 0) {
+          // 'a' adds selected papers to library (from smart search, ADS search, or refs/cites)
+          this.addSelectedPapersToLibrary();
         }
         break;
       case 'w':
         // 'w' opens in ADS (web)
-        // Check if on refs/cites tab with a focused/selected item
-        const activeTabW = document.querySelector('.tab-btn.active')?.dataset.tab;
-        if (activeTabW === 'refs' && this.selectedRefs?.size > 0) {
-          // Open first selected ref in ADS
-          const refIndex = Array.from(this.selectedRefs)[0];
-          const ref = this.currentRefs?.[refIndex];
-          if (ref?.ref_bibcode) {
-            window.electronAPI.openExternal(`https://ui.adsabs.harvard.edu/abs/${ref.ref_bibcode}`);
-          }
-        } else if (activeTabW === 'cites' && this.selectedCites?.size > 0) {
-          // Open first selected cite in ADS
-          const citeIndex = Array.from(this.selectedCites)[0];
-          const cite = this.currentCites?.[citeIndex];
-          if (cite?.citing_bibcode) {
-            window.electronAPI.openExternal(`https://ui.adsabs.harvard.edu/abs/${cite.citing_bibcode}`);
-          }
-        } else if (this.selectedPaper) {
+        if (this.selectedPaper) {
           this.openInADS();
         }
         break;
@@ -3740,8 +3719,10 @@ class ADSReader {
         this.zoomPDF(-0.1);
         break;
       case 'R':
-        // Shift+R: Switch to Refs tab
-        this.switchTab('refs');
+        // Shift+R: View references
+        if (this.selectedPaper && this.selectedPaper.bibcode) {
+          this.executeRefsQuery(this.selectedPaper.bibcode, this.selectedPaper);
+        }
         break;
       case 'r':
         if (!e.metaKey && !e.ctrlKey) {
@@ -3752,8 +3733,10 @@ class ADSReader {
         }
         break;
       case 'C':
-        // Shift+C: Switch to Cites tab
-        this.switchTab('cites');
+        // Shift+C: View citations
+        if (this.selectedPaper && this.selectedPaper.bibcode) {
+          this.executeCitesQuery(this.selectedPaper.bibcode, this.selectedPaper);
+        }
         break;
       case 's':
         if (this.selectedPapers.size > 0) {
@@ -6099,18 +6082,11 @@ class ADSReader {
     // Update BibTeX tab with full information
     await this.displayBibtex(resolvedPaper);
 
-    // Load references and citations (only for local papers)
+    // Load annotations for local papers
     if (!this.currentSmartSearch && typeof resolvedPaper.id === 'number') {
-      await this.loadReferences(resolvedPaper.id);
-      await this.loadCitations(resolvedPaper.id);
       await this.loadAnnotations(resolvedPaper.id);
     } else {
-      // Clear refs/cites for ADS search papers (they don't have local data)
-      this.currentRefs = [];
-      this.currentCites = [];
       this.annotations = [];
-      this.renderReferencesList([]);
-      this.renderCitationsList([]);
     }
 
     // Check current tab - stay on info tabs if already there
@@ -6915,379 +6891,6 @@ class ADSReader {
     recordInfoEl.innerHTML = recordItems.join('');
   }
 
-  async loadReferences(paperId) {
-    const refs = await window.electronAPI.getReferences(paperId);
-    const refsEl = document.getElementById('refs-list');
-    const toolbar = document.getElementById('refs-toolbar');
-
-    this.currentRefs = refs;
-    this.selectedRefs.clear();
-    this.lastRefClickedIndex = -1;
-
-    if (refs.length === 0) {
-      refsEl.innerHTML = '<p class="no-content">No references loaded. Click "Sync" to retrieve from ADS.</p>';
-      toolbar.classList.add('hidden');
-      return;
-    }
-
-    // Check which refs are already in library
-    const libraryBibcodes = new Set(this.papers.map(p => p.bibcode).filter(Boolean));
-
-    toolbar.classList.remove('hidden');
-    document.getElementById('refs-count').textContent = `${refs.length} references`;
-
-    refsEl.innerHTML = refs.map((ref, index) => {
-      const inLibrary = libraryBibcodes.has(ref.ref_bibcode);
-      const isSelected = this.selectedRefs.has(index);
-      // Action buttons before authors (only for non-library items)
-      const actionButtons = !inLibrary ?
-        `<span class="paper-action-btns"><span class="paper-action-btn ref-import-btn" data-bibcode="${ref.ref_bibcode}" title="Add to library (a)">+</span><a class="paper-action-btn ref-ads-link" href="#" data-bibcode="${ref.ref_bibcode}" title="Open in ADS (w)">↗</a></span>` : '';
-      return `
-        <div class="ref-item${inLibrary ? ' in-library' : ''}${isSelected ? ' selected' : ''}" data-index="${index}" data-bibcode="${ref.ref_bibcode}">
-          <div class="ref-content">
-            <div class="ref-title">${this.escapeHtml(ref.ref_title || 'Untitled')}</div>
-            <div class="ref-meta">${actionButtons}${this.formatAuthorsForList(ref.ref_authors)} · ${ref.ref_year || ''}${inLibrary ? '<span class="in-library-badge">In Library</span>' : ''}</div>
-          </div>
-        </div>
-      `;
-    }).join('');
-
-    refsEl.querySelectorAll('.ref-item').forEach(item => {
-      const adsLink = item.querySelector('.ref-ads-link');
-      const importBtn = item.querySelector('.ref-import-btn');
-      const index = parseInt(item.dataset.index);
-      const inLibrary = item.classList.contains('in-library');
-
-      item.addEventListener('click', (e) => {
-        if (e.target === adsLink || e.target === importBtn) return;
-        if (inLibrary) return; // Can't select items already in library
-        this.handleRefClick(index, e);
-      });
-
-      adsLink.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const bibcode = item.dataset.bibcode;
-        if (bibcode) {
-          window.electronAPI.openExternal(`https://ui.adsabs.harvard.edu/abs/${bibcode}`);
-        }
-      });
-
-      importBtn?.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const bibcode = item.dataset.bibcode;
-        if (bibcode) {
-          this.importSingleBibcode(bibcode, 'ref');
-        }
-      });
-    });
-  }
-
-  // Handle ref item click with Cmd/Shift support
-  handleRefClick(index, event) {
-    const isMeta = event.metaKey || event.ctrlKey;
-    const isShift = event.shiftKey;
-    const libraryBibcodes = new Set(this.papers.map(p => p.bibcode).filter(Boolean));
-
-    if (isShift && this.lastRefClickedIndex >= 0) {
-      // Range select
-      const start = Math.min(this.lastRefClickedIndex, index);
-      const end = Math.max(this.lastRefClickedIndex, index);
-      if (!isMeta) this.selectedRefs.clear();
-      for (let i = start; i <= end; i++) {
-        const ref = this.currentRefs[i];
-        if (ref && !libraryBibcodes.has(ref.ref_bibcode)) {
-          this.selectedRefs.add(i);
-        }
-      }
-    } else if (isMeta) {
-      // Toggle select
-      if (this.selectedRefs.has(index)) {
-        this.selectedRefs.delete(index);
-      } else {
-        this.selectedRefs.add(index);
-      }
-    } else {
-      // Single select
-      this.selectedRefs.clear();
-      this.selectedRefs.add(index);
-    }
-
-    this.lastRefClickedIndex = index;
-    this.updateRefListSelection();
-  }
-
-  // Update visual selection state for refs
-  updateRefListSelection() {
-    document.querySelectorAll('.ref-item').forEach(item => {
-      const index = parseInt(item.dataset.index);
-      item.classList.toggle('selected', this.selectedRefs.has(index));
-    });
-  }
-
-  async loadCitations(paperId) {
-    const cites = await window.electronAPI.getCitations(paperId);
-    const citesEl = document.getElementById('cites-list');
-    const toolbar = document.getElementById('cites-toolbar');
-
-    this.currentCites = cites;
-    this.selectedCites.clear();
-    this.lastCiteClickedIndex = -1;
-
-    if (cites.length === 0) {
-      citesEl.innerHTML = '<p class="no-content">No citations loaded. Click "Sync" to retrieve from ADS.</p>';
-      toolbar.classList.add('hidden');
-      return;
-    }
-
-    // Check which cites are already in library
-    const libraryBibcodes = new Set(this.papers.map(p => p.bibcode).filter(Boolean));
-
-    toolbar.classList.remove('hidden');
-    document.getElementById('cites-count').textContent = `${cites.length} citations`;
-
-    // Hide limit controls if we already have all citations (less than default limit)
-    const citesLimitControls = document.querySelector('.cites-limit-controls');
-    if (citesLimitControls) {
-      citesLimitControls.style.display = cites.length < 50 ? 'none' : '';
-    }
-
-    citesEl.innerHTML = cites.map((cite, index) => {
-      const inLibrary = libraryBibcodes.has(cite.citing_bibcode);
-      const isSelected = this.selectedCites.has(index);
-      // Action buttons before authors (only for non-library items)
-      const actionButtons = !inLibrary ?
-        `<span class="paper-action-btns"><span class="paper-action-btn cite-import-btn" data-bibcode="${cite.citing_bibcode}" title="Add to library (a)">+</span><a class="paper-action-btn cite-ads-link" href="#" data-bibcode="${cite.citing_bibcode}" title="Open in ADS (w)">↗</a></span>` : '';
-      return `
-        <div class="cite-item${inLibrary ? ' in-library' : ''}${isSelected ? ' selected' : ''}" data-index="${index}" data-bibcode="${cite.citing_bibcode}">
-          <div class="cite-content">
-            <div class="cite-title">${this.escapeHtml(cite.citing_title || 'Untitled')}</div>
-            <div class="cite-meta">${actionButtons}${this.formatAuthorsForList(cite.citing_authors)} · ${cite.citing_year || ''}${inLibrary ? '<span class="in-library-badge">In Library</span>' : ''}</div>
-          </div>
-        </div>
-      `;
-    }).join('');
-
-    citesEl.querySelectorAll('.cite-item').forEach(item => {
-      const adsLink = item.querySelector('.cite-ads-link');
-      const importBtn = item.querySelector('.cite-import-btn');
-      const index = parseInt(item.dataset.index);
-      const inLibrary = item.classList.contains('in-library');
-
-      item.addEventListener('click', (e) => {
-        if (e.target === adsLink || e.target === importBtn) return;
-        if (inLibrary) return; // Can't select items already in library
-        this.handleCiteClick(index, e);
-      });
-
-      adsLink.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const bibcode = item.dataset.bibcode;
-        if (bibcode) {
-          window.electronAPI.openExternal(`https://ui.adsabs.harvard.edu/abs/${bibcode}`);
-        }
-      });
-
-      importBtn?.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const bibcode = item.dataset.bibcode;
-        if (bibcode) {
-          this.importSingleBibcode(bibcode, 'cite');
-        }
-      });
-    });
-  }
-
-  // Handle cite item click with Cmd/Shift support
-  handleCiteClick(index, event) {
-    const isMeta = event.metaKey || event.ctrlKey;
-    const isShift = event.shiftKey;
-    const libraryBibcodes = new Set(this.papers.map(p => p.bibcode).filter(Boolean));
-
-    if (isShift && this.lastCiteClickedIndex >= 0) {
-      // Range select
-      const start = Math.min(this.lastCiteClickedIndex, index);
-      const end = Math.max(this.lastCiteClickedIndex, index);
-      if (!isMeta) this.selectedCites.clear();
-      for (let i = start; i <= end; i++) {
-        const cite = this.currentCites[i];
-        if (cite && !libraryBibcodes.has(cite.citing_bibcode)) {
-          this.selectedCites.add(i);
-        }
-      }
-    } else if (isMeta) {
-      // Toggle select
-      if (this.selectedCites.has(index)) {
-        this.selectedCites.delete(index);
-      } else {
-        this.selectedCites.add(index);
-      }
-    } else {
-      // Single select
-      this.selectedCites.clear();
-      this.selectedCites.add(index);
-    }
-
-    this.lastCiteClickedIndex = index;
-    this.updateCiteListSelection();
-  }
-
-  // Update visual selection state for cites
-  updateCiteListSelection() {
-    document.querySelectorAll('.cite-item').forEach(item => {
-      const index = parseInt(item.dataset.index);
-      item.classList.toggle('selected', this.selectedCites.has(index));
-    });
-  }
-
-  /**
-   * Fetch all references from ADS (no limit)
-   */
-  async fetchRefsFromADS() {
-    if (!this.selectedPaper?.bibcode) {
-      this.showNotification('Paper has no bibcode - cannot fetch from ADS', 'error');
-      return;
-    }
-
-    const loadAllBtn = document.getElementById('refs-load-all');
-
-    // Disable button during fetch
-    if (loadAllBtn) {
-      loadAllBtn.disabled = true;
-      loadAllBtn.textContent = 'Loading...';
-    }
-
-    try {
-      // Fetch all references (no limit)
-      const result = await window.electronAPI.adsGetReferences(this.selectedPaper.bibcode, { limit: 2000 });
-      if (result.success && result.data) {
-        // Store refs in database
-        await window.electronAPI.addReferences(this.selectedPaper.id, result.data.map(r => ({
-          bibcode: r.bibcode,
-          title: r.title?.[0] || r.title,
-          authors: Array.isArray(r.author) ? r.author.join(', ') : r.author,
-          year: r.year
-        })));
-        // Reload from database
-        await this.loadReferences(this.selectedPaper.id);
-        this.showNotification(`Loaded ${result.data.length} references`, 'success');
-      } else {
-        this.showNotification(result.error || 'Failed to fetch references', 'error');
-      }
-    } catch (err) {
-      this.showNotification(`Error fetching references: ${err.message}`, 'error');
-    } finally {
-      if (loadAllBtn) {
-        loadAllBtn.disabled = false;
-        loadAllBtn.textContent = 'Load All';
-      }
-    }
-  }
-
-  /**
-   * Fetch citations from ADS with custom limit
-   * @param {number} [limit] - Number of cites to fetch (uses input value if not provided)
-   */
-  async fetchCitesFromADS(limit = null) {
-    if (!this.selectedPaper?.bibcode) {
-      this.showNotification('Paper has no bibcode - cannot fetch from ADS', 'error');
-      return;
-    }
-
-    const limitInput = document.getElementById('cites-limit-input');
-    const actualLimit = limit || parseInt(limitInput.value) || 50;
-    const loadBtn = document.getElementById('cites-load-more');
-    const loadAllBtn = document.getElementById('cites-load-all');
-
-    // Disable buttons during fetch
-    loadBtn.disabled = true;
-    loadAllBtn.disabled = true;
-    loadBtn.textContent = 'Loading...';
-
-    try {
-      const result = await window.electronAPI.adsGetCitations(this.selectedPaper.bibcode, { limit: actualLimit });
-      if (result.success && result.data) {
-        // Store cites in database
-        await window.electronAPI.addCitations(this.selectedPaper.id, result.data.map(c => ({
-          bibcode: c.bibcode,
-          title: c.title?.[0] || c.title,
-          authors: Array.isArray(c.author) ? c.author.join(', ') : c.author,
-          year: c.year
-        })));
-        // Reload from database
-        await this.loadCitations(this.selectedPaper.id);
-        this.showNotification(`Loaded ${result.data.length} citations`, 'success');
-      } else {
-        this.showNotification(result.error || 'Failed to fetch citations', 'error');
-      }
-    } catch (err) {
-      this.showNotification(`Error fetching citations: ${err.message}`, 'error');
-    } finally {
-      loadBtn.disabled = false;
-      loadAllBtn.disabled = false;
-      loadBtn.textContent = 'Load';
-    }
-  }
-
-  // Refs selection methods
-  selectAllRefs() {
-    const libraryBibcodes = new Set(this.papers.map(p => p.bibcode).filter(Boolean));
-    this.selectedRefs.clear();
-    this.currentRefs.forEach((ref, index) => {
-      if (!libraryBibcodes.has(ref.ref_bibcode)) {
-        this.selectedRefs.add(index);
-      }
-    });
-    this.updateRefListSelection();
-  }
-
-  async importSelectedRefs() {
-    if (this.selectedRefs.size === 0) return;
-
-    const papers = Array.from(this.selectedRefs).map(index => {
-      const ref = this.currentRefs[index];
-      return { bibcode: ref.ref_bibcode };
-    });
-
-    await this.importPapersFromBibcodes(papers, 'refs');
-  }
-
-  // Cites selection methods
-  selectAllCites() {
-    const libraryBibcodes = new Set(this.papers.map(p => p.bibcode).filter(Boolean));
-    this.selectedCites.clear();
-    this.currentCites.forEach((cite, index) => {
-      if (!libraryBibcodes.has(cite.citing_bibcode)) {
-        this.selectedCites.add(index);
-      }
-    });
-    this.updateCiteListSelection();
-  }
-
-  async importSelectedCites() {
-    if (this.selectedCites.size === 0) return;
-
-    const papers = Array.from(this.selectedCites).map(index => {
-      const cite = this.currentCites[index];
-      return { bibcode: cite.citing_bibcode };
-    });
-
-    await this.importPapersFromBibcodes(papers, 'cites');
-  }
-
-  /**
-   * Import a single bibcode from refs or cites list
-   * @param {string} bibcode - The bibcode to import
-   * @param {string} source - 'ref' or 'cite' for notification message
-   */
-  async importSingleBibcode(bibcode, source) {
-    const papers = [{ bibcode }];
-    await this.importPapersFromBibcodes(papers, source === 'ref' ? 'refs' : 'cites');
-  }
-
   /**
    * Attach a dropped PDF file to a paper
    * @param {number} paperId - The paper ID to attach the PDF to
@@ -7441,21 +7044,11 @@ class ADSReader {
     if (this.selectedPapers.size > 1) {
       if (tabName === 'abstract') {
         this.displayMultiAbstract();
-      } else if (tabName === 'refs') {
-        this.displayMultiRefs();
-      } else if (tabName === 'cites') {
-        this.displayMultiCites();
       } else if (tabName === 'bibtex') {
         this.displayMultiBibtex();
       }
-    } else if (this.selectedPaper && !this.currentSmartSearch) {
-      // Single paper selected - load refs/cites when switching to those tabs
-      if (tabName === 'refs') {
-        this.loadReferences(this.selectedPaper.id);
-      } else if (tabName === 'cites') {
-        this.loadCitations(this.selectedPaper.id);
-      }
     }
+    // Note: refs/cites tabs now trigger ADS queries (intercepted in click handler)
   }
 
   // Switch between full-screen views on mobile
@@ -7525,12 +7118,6 @@ class ADSReader {
       case 'abstract':
         this.displayAbstract(paper);
         break;
-      case 'refs':
-        await this.loadReferences(paper.id);
-        break;
-      case 'cites':
-        await this.loadCitations(paper.id);
-        break;
       case 'bibtex':
         await this.displayBibtex(paper);
         break;
@@ -7540,6 +7127,7 @@ class ADSReader {
       case 'ai':
         this.loadAIPanelData();
         break;
+      // Note: refs/cites are now handled as ADS queries, not loaded from database
     }
 
     // Update bottom bar info
@@ -7576,195 +7164,7 @@ class ADSReader {
     abstractEl.innerHTML = html;
   }
 
-  async displayMultiRefs() {
-    const refsEl = document.getElementById('refs-list');
-    const toolbar = document.getElementById('refs-toolbar');
-    const papers = this.papers.filter(p => this.selectedPapers.has(p.id));
-
-    if (papers.length === 0) return;
-
-    refsEl.innerHTML = '<p class="no-content">Loading references...</p>';
-    toolbar.classList.add('hidden');
-
-    // Collect all references from all selected papers
-    const allRefs = [];
-    const seenBibcodes = new Set();
-
-    for (const paper of papers) {
-      const refs = await window.electronAPI.getReferences(paper.id);
-      for (const ref of refs) {
-        // Deduplicate by bibcode
-        if (ref.ref_bibcode && seenBibcodes.has(ref.ref_bibcode)) continue;
-        if (ref.ref_bibcode) seenBibcodes.add(ref.ref_bibcode);
-        allRefs.push({ ...ref, sourcePaper: paper.title });
-      }
-    }
-
-    if (allRefs.length === 0) {
-      refsEl.innerHTML = `<p class="no-content">No references found for ${papers.length} selected papers.</p>`;
-      return;
-    }
-
-    // Check which refs are already in library
-    const libraryBibcodes = new Set(this.papers.map(p => p.bibcode).filter(Boolean));
-
-    // Store refs for selection tracking
-    this.currentRefs = allRefs.map(ref => ({
-      ref_bibcode: ref.ref_bibcode,
-      ref_title: ref.ref_title,
-      ref_authors: ref.ref_authors,
-      ref_year: ref.ref_year
-    }));
-    this.selectedRefs.clear();
-
-    const html = allRefs.map((ref, index) => {
-      const bibcode = ref.ref_bibcode;
-      const inLibrary = bibcode && libraryBibcodes.has(bibcode);
-      const authors = this.formatAuthorsForList(ref.ref_authors);
-      return `
-        <div class="ref-item${inLibrary ? ' in-library' : ''}" data-index="${index}" data-bibcode="${bibcode || ''}">
-          <span class="ref-number">${index + 1}.</span>
-          <input type="checkbox" class="ref-checkbox" ${inLibrary ? 'disabled' : ''}>
-          <div class="ref-content">
-            <div class="ref-title">${this.escapeHtml(ref.ref_title || 'Unknown Title')}</div>
-            <div class="ref-authors">${authors}</div>
-            <div class="ref-meta">${[ref.ref_year, bibcode].filter(Boolean).join(' • ')}</div>
-          </div>
-          <button class="ref-import-btn" data-bibcode="${bibcode || ''}" title="Import this paper"${!bibcode ? ' disabled' : ''}>+</button>
-        </div>
-      `;
-    }).join('');
-
-    refsEl.innerHTML = html;
-    toolbar.classList.remove('hidden');
-    document.getElementById('refs-count').textContent = `${allRefs.length} references`;
-
-    // Add event listeners
-    refsEl.querySelectorAll('.ref-item').forEach(item => {
-      const checkbox = item.querySelector('.ref-checkbox');
-      const importBtn = item.querySelector('.ref-import-btn');
-      const index = parseInt(item.dataset.index);
-
-      item.addEventListener('click', (e) => {
-        if (e.target === checkbox || e.target === importBtn) return;
-        if (!checkbox.disabled) {
-          checkbox.checked = !checkbox.checked;
-          this.toggleRefSelection(index, checkbox.checked);
-        }
-      });
-
-      checkbox.addEventListener('change', () => {
-        this.toggleRefSelection(index, checkbox.checked);
-      });
-
-      importBtn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        if (item.dataset.bibcode) {
-          await this.importSingleRef(item.dataset.bibcode, importBtn);
-        }
-      });
-    });
-
-    this.updateRefsImportButton();
-  }
-
-  async displayMultiCites() {
-    const citesEl = document.getElementById('cites-list');
-    const toolbar = document.getElementById('cites-toolbar');
-    const papers = this.papers.filter(p => this.selectedPapers.has(p.id));
-
-    if (papers.length === 0) return;
-
-    citesEl.innerHTML = '<p class="no-content">Loading citations...</p>';
-    toolbar.classList.add('hidden');
-
-    // Collect all citations from all selected papers
-    const allCites = [];
-    const seenBibcodes = new Set();
-
-    for (const paper of papers) {
-      const cites = await window.electronAPI.getCitations(paper.id);
-      for (const cite of cites) {
-        // Deduplicate by bibcode
-        if (cite.citing_bibcode && seenBibcodes.has(cite.citing_bibcode)) continue;
-        if (cite.citing_bibcode) seenBibcodes.add(cite.citing_bibcode);
-        allCites.push({ ...cite, sourcePaper: paper.title });
-      }
-    }
-
-    if (allCites.length === 0) {
-      citesEl.innerHTML = `<p class="no-content">No citations found for ${papers.length} selected papers.</p>`;
-      return;
-    }
-
-    // Check which cites are already in library
-    const libraryBibcodes = new Set(this.papers.map(p => p.bibcode).filter(Boolean));
-
-    // Store cites for selection tracking
-    this.currentCites = allCites.map(cite => ({
-      citing_bibcode: cite.citing_bibcode,
-      citing_title: cite.citing_title,
-      citing_authors: cite.citing_authors,
-      citing_year: cite.citing_year
-    }));
-    this.selectedCites.clear();
-
-    const html = allCites.map((cite, index) => {
-      const bibcode = cite.citing_bibcode;
-      const inLibrary = bibcode && libraryBibcodes.has(bibcode);
-      const authors = this.formatAuthorsForList(cite.citing_authors);
-      return `
-        <div class="cite-item${inLibrary ? ' in-library' : ''}" data-index="${index}" data-bibcode="${bibcode || ''}">
-          <span class="cite-number">${index + 1}.</span>
-          <input type="checkbox" class="cite-checkbox" ${inLibrary ? 'disabled' : ''}>
-          <div class="cite-content">
-            <div class="cite-title">${this.escapeHtml(cite.citing_title || 'Unknown Title')}</div>
-            <div class="cite-authors">${authors}</div>
-            <div class="cite-meta">${[cite.citing_year, bibcode].filter(Boolean).join(' • ')}</div>
-          </div>
-          <button class="ref-import-btn" data-bibcode="${bibcode || ''}" title="Import this paper"${!bibcode ? ' disabled' : ''}>+</button>
-        </div>
-      `;
-    }).join('');
-
-    citesEl.innerHTML = html;
-    toolbar.classList.remove('hidden');
-    document.getElementById('cites-count').textContent = `${allCites.length} citations`;
-
-    // Hide limit controls if we already have all citations (less than default limit)
-    const citesLimitControls = document.querySelector('.cites-limit-controls');
-    if (citesLimitControls) {
-      citesLimitControls.style.display = allCites.length < 50 ? 'none' : '';
-    }
-
-    // Add event listeners
-    citesEl.querySelectorAll('.cite-item').forEach(item => {
-      const checkbox = item.querySelector('.cite-checkbox');
-      const importBtn = item.querySelector('.ref-import-btn');
-      const index = parseInt(item.dataset.index);
-
-      item.addEventListener('click', (e) => {
-        if (e.target === checkbox || e.target === importBtn) return;
-        if (!checkbox.disabled) {
-          checkbox.checked = !checkbox.checked;
-          this.toggleCiteSelection(index, checkbox.checked);
-        }
-      });
-
-      checkbox.addEventListener('change', () => {
-        this.toggleCiteSelection(index, checkbox.checked);
-      });
-
-      importBtn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        if (item.dataset.bibcode) {
-          await this.importSingleCite(item.dataset.bibcode, importBtn);
-        }
-      });
-    });
-
-    this.updateCitesImportButton();
-  }
+  // Note: displayMultiRefs and displayMultiCites removed - refs/cites now use ADS query mode
 
   displayMultiBibtex() {
     const bibtexEl = document.getElementById('bibtex-content');
@@ -8356,17 +7756,6 @@ class ADSReader {
     const token = await window.electronAPI.getAdsToken();
     if (!token) {
       alert('Please configure your ADS API token first.');
-      return;
-    }
-
-    // Check if on refs/cites tab with selections - import those instead
-    const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
-    if (activeTab === 'refs' && this.selectedRefs.size > 0) {
-      await this.importSelectedRefs();
-      return;
-    }
-    if (activeTab === 'cites' && this.selectedCites.size > 0) {
-      await this.importSelectedCites();
       return;
     }
 
@@ -10284,6 +9673,210 @@ class ADSReader {
 
     // Return to All Papers
     this.setView('all');
+  }
+
+  // ===== Refs/Cites Query Mode =====
+
+  async executeRefsQuery(bibcode, sourcePaper) {
+    if (!bibcode) return;
+
+    // Store source paper for back navigation
+    this.refsQuerySourcePaper = sourcePaper;
+    this.refsQueryBibcode = bibcode;
+    this.citesQueryBibcode = null;
+
+    // Check cache first
+    if (this.refsCache.has(bibcode)) {
+      const cached = this.refsCache.get(bibcode);
+      this.showRefsCitesResults(cached.papers, cached.count, 'refs', sourcePaper);
+      return;
+    }
+
+    // Show loading state
+    this.showNotification('Loading references...', 'info');
+
+    try {
+      // Execute ADS query for references
+      const query = `references(bibcode:"${bibcode}")`;
+      const result = await window.electronAPI.adsImportSearch(query, { rows: 500 });
+
+      if (result.success) {
+        const papers = result.data.papers.map(p => ({
+          ...p,
+          id: p.bibcode,
+          isAdsSearch: true
+        }));
+
+        // Cache results
+        this.refsCache.set(bibcode, {
+          papers,
+          count: result.data.numFound
+        });
+
+        this.showRefsCitesResults(papers, result.data.numFound, 'refs', sourcePaper);
+      } else {
+        this.showNotification(`Failed to load references: ${result.error}`, 'error');
+      }
+    } catch (error) {
+      this.showNotification(`Error loading references: ${error.message}`, 'error');
+    }
+  }
+
+  async executeCitesQuery(bibcode, sourcePaper) {
+    if (!bibcode) return;
+
+    // Store source paper for back navigation
+    this.refsQuerySourcePaper = sourcePaper;
+    this.citesQueryBibcode = bibcode;
+    this.refsQueryBibcode = null;
+
+    // Check cache first
+    if (this.citesCache.has(bibcode)) {
+      const cached = this.citesCache.get(bibcode);
+      this.showRefsCitesResults(cached.papers, cached.count, 'cites', sourcePaper);
+      return;
+    }
+
+    // Show loading state
+    this.showNotification('Loading citations...', 'info');
+
+    try {
+      // Execute ADS query for citations
+      const query = `citations(bibcode:"${bibcode}")`;
+      const result = await window.electronAPI.adsImportSearch(query, { rows: 500 });
+
+      if (result.success) {
+        const papers = result.data.papers.map(p => ({
+          ...p,
+          id: p.bibcode,
+          isAdsSearch: true
+        }));
+
+        // Cache results
+        this.citesCache.set(bibcode, {
+          papers,
+          count: result.data.numFound
+        });
+
+        this.showRefsCitesResults(papers, result.data.numFound, 'cites', sourcePaper);
+      } else {
+        this.showNotification(`Failed to load citations: ${result.error}`, 'error');
+      }
+    } catch (error) {
+      this.showNotification(`Error loading citations: ${error.message}`, 'error');
+    }
+  }
+
+  showRefsCitesResults(papers, count, type, sourcePaper) {
+    // Enter refs/cites search mode (similar to ADS search)
+    this.isAdsSearchActive = true;
+    this.currentSmartSearch = null;
+    this.currentView = null;
+    this.currentCollection = null;
+
+    // Clear selections
+    this.selectedPapers.clear();
+    this.selectedPaper = null;
+
+    // Set papers
+    this.papers = papers;
+
+    // Mark which papers are in library
+    const libraryBibcodes = new Set();
+    // We need to get library papers - they're stored when we load them
+    // For now, check via the paper's inLibrary flag which gets set during rendering
+
+    // Show refs/cites header
+    this.showRefsCitesHeader(type, sourcePaper, count);
+
+    // Switch to library tab to show results
+    this.switchTab('library');
+
+    // Update UI
+    this.updateNavActiveStates();
+    this.sortPapers();
+    this.renderPaperList();
+
+    // Switch to Abstract tab (refs/cites results don't have local PDFs)
+    if (!this.isIOS) {
+      this.switchTab('abstract');
+    }
+  }
+
+  showRefsCitesHeader(type, sourcePaper, count) {
+    // Show the refs/cites navigation header
+    let header = document.getElementById('refs-cites-header');
+    if (!header) {
+      // Create header if it doesn't exist
+      header = document.createElement('div');
+      header.id = 'refs-cites-header';
+      header.className = 'refs-cites-header';
+      header.innerHTML = `
+        <button class="refs-cites-back-btn" title="Back to paper">←</button>
+        <span class="refs-cites-context"></span>
+        <span class="refs-cites-count"></span>
+      `;
+
+      // Insert at top of papers container
+      const papersContainer = document.getElementById('papers-container');
+      if (papersContainer) {
+        papersContainer.insertBefore(header, papersContainer.firstChild);
+      }
+
+      // Add click handler for back button
+      header.querySelector('.refs-cites-back-btn').addEventListener('click', () => {
+        this.exitRefsCitesMode();
+      });
+    }
+
+    // Update header content
+    const typeLabel = type === 'refs' ? 'References' : 'Citations';
+    const titleShort = sourcePaper?.title?.substring(0, 50) + (sourcePaper?.title?.length > 50 ? '...' : '') || 'Unknown';
+    header.querySelector('.refs-cites-context').textContent = `${typeLabel} of: "${titleShort}"`;
+    header.querySelector('.refs-cites-count').textContent = `${count} papers`;
+    header.classList.remove('hidden');
+  }
+
+  hideRefsCitesHeader() {
+    const header = document.getElementById('refs-cites-header');
+    if (header) {
+      header.classList.add('hidden');
+    }
+  }
+
+  exitRefsCitesMode() {
+    // Clear refs/cites query state
+    this.refsQueryBibcode = null;
+    this.citesQueryBibcode = null;
+
+    // Hide header
+    this.hideRefsCitesHeader();
+
+    // Exit ADS search mode
+    this.isAdsSearchActive = false;
+
+    // Return to All Papers and restore source paper selection if available
+    this.setView('all');
+
+    // If we have a source paper, re-select it
+    if (this.refsQuerySourcePaper) {
+      const sourcePaperId = this.refsQuerySourcePaper.id;
+      this.refsQuerySourcePaper = null;
+
+      // Find and select the paper
+      setTimeout(() => {
+        const paper = this.papers.find(p => p.id === sourcePaperId);
+        if (paper) {
+          this.selectPaper(paper);
+          this.scrollToSelectedPaper();
+        }
+      }, 100);
+    }
+  }
+
+  // Check if we're in refs/cites mode
+  isRefsCitesMode() {
+    return this.refsQueryBibcode !== null || this.citesQueryBibcode !== null;
   }
 
   showAdsPaneError(message) {

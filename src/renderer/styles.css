@@ -3058,135 +3058,15 @@ body.ios-platform .pdf-container {
   color: var(--text-secondary);
 }
 
-/* References/Citations Tab */
+/* References/Citations Tab (now just placeholders - refs/cites use ADS query mode) */
 #tab-refs, #tab-cites {
   padding: 12px;
-}
-
-.refs-toolbar, .cites-toolbar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 8px 12px;
-  background: var(--bg-tertiary);
-  border-radius: 6px;
-  margin-bottom: 8px;
-  font-size: 12px;
-}
-
-.refs-actions, .cites-actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.refs-limit-controls, .cites-limit-controls {
-  display: flex;
-  gap: 4px;
-  align-items: center;
-}
-
-.refs-limit-controls input, .cites-limit-controls input {
-  width: 60px;
-  padding: 3px 6px;
-  font-size: 11px;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  background: var(--bg-secondary);
-  color: var(--text-primary);
-}
-
-.refs-limit-controls input:focus, .cites-limit-controls input:focus {
-  outline: none;
-  border-color: var(--accent-color);
 }
 
 .primary-button.small {
   padding: 4px 10px;
   font-size: 11px;
 }
-
-.refs-list, .cites-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.ref-item, .cite-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
-  cursor: pointer;
-  transition: background 0.1s;
-}
-
-.ref-item:hover, .cite-item:hover {
-  background: var(--bg-hover);
-}
-
-.ref-content, .cite-content {
-  flex: 1;
-  min-width: 0;
-}
-
-.ref-title, .cite-title {
-  font-size: 12px;
-  margin-bottom: 3px;
-}
-
-.ref-meta, .cite-meta {
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-
-.ref-item.in-library, .cite-item.in-library {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.ref-item.in-library:hover, .cite-item.in-library:hover {
-  background: transparent;
-}
-
-.ref-item.selected, .cite-item.selected {
-  background: var(--bg-selected);
-}
-
-.in-library-badge {
-  font-size: 10px;
-  color: var(--accent);
-  margin-left: 8px;
-  font-weight: 500;
-}
-
-.ads-lookup-import-btn {
-  flex-shrink: 0;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  margin-left: auto;
-  background: var(--accent);
-  border: none;
-  border-radius: 4px;
-  color: white;
-  font-size: 16px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.ads-lookup-import-btn:hover {
-  background: var(--accent-hover);
-}
-
-.ads-lookup-import-btn:disabled {
-  cursor: default;
-  opacity: 0.6;
-}
-
-/* Action buttons in refs/cites use .paper-action-btn class for consistency */
 
 /* BibTeX Tab */
 #tab-bibtex {
@@ -7702,8 +7582,7 @@ body.viewing-pdf .mobile-top-bar {
 
   /* Ensure interactive elements are touch-friendly */
   .paper-row,
-  .collection-item,
-  .ref-cite-item {
+  .collection-item {
     min-height: 44px;
   }
 }
@@ -8830,6 +8709,59 @@ body.ios-platform #mobile-select-btn {
 /* Disable swipe in selection mode */
 body.selection-mode .paper-swipe-container .paper-item {
   transform: none !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   REFS/CITES QUERY MODE
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.refs-cites-header {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border);
+  gap: 10px;
+}
+
+.refs-cites-header.hidden {
+  display: none;
+}
+
+.refs-cites-back-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 16px;
+  cursor: pointer;
+  transition: background 0.15s;
+  flex-shrink: 0;
+}
+
+.refs-cites-back-btn:hover {
+  background: var(--accent);
+  color: white;
+}
+
+.refs-cites-context {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.refs-cites-count {
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

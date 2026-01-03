@@ -526,40 +526,6 @@ async function fetchAndApplyAdsMetadata(paperId, extractedMetadata = null) {
       bibtex: bibtexStr
     });
 
-    // Fetch refs/cites - wait for this to complete for reliable import
-    // Fetch all refs (500 limit), but only 50 cites (popular papers can have thousands)
-    try {
-      console.log(`Fetching references and citations for bibcode: ${adsData.bibcode}`);
-      const [refs, cits] = await Promise.all([
-        adsApi.getReferences(token, adsData.bibcode, { rows: 500 }).catch(e => {
-          console.error('Failed to fetch references:', e.message);
-          return [];
-        }),
-        adsApi.getCitations(token, adsData.bibcode, { rows: 50 }).catch(e => {
-          console.error('Failed to fetch citations:', e.message);
-          return [];
-        })
-      ]);
-
-      console.log(`Found ${refs.length} references and ${cits.length} citations`);
-
-      database.addReferences(paperId, refs.map(r => ({
-        bibcode: r.bibcode,
-        title: r.title?.[0],
-        authors: r.author?.join(', '),
-        year: r.year
-      })));
-
-      database.addCitations(paperId, cits.map(c => ({
-        bibcode: c.bibcode,
-        title: c.title?.[0],
-        authors: c.author?.join(', '),
-        year: c.year
-      })));
-    } catch (e) {
-      console.error('Failed to fetch refs/cites:', e.message);
-    }
-
     return { success: true, metadata };
   } catch (error) {
     console.error('ADS fetch error:', error.message);
@@ -761,28 +727,6 @@ function createTempDatabaseInterface(db, libraryPath) {
         db.run('INSERT OR IGNORE INTO paper_collections (paper_id, collection_id) VALUES (?, ?)',
           [paperId, collectionId]);
       } catch (e) { /* Ignore duplicates */ }
-    },
-
-    addReferences(paperId, refs) {
-      for (const ref of refs) {
-        const stmt = db.prepare(`
-          INSERT INTO refs (paper_id, ref_bibcode, ref_title, ref_authors, ref_year)
-          VALUES (?, ?, ?, ?, ?)
-        `);
-        stmt.run([paperId, ref.bibcode, ref.title, ref.authors, ref.year]);
-        stmt.free();
-      }
-    },
-
-    addCitations(paperId, cites) {
-      for (const cite of cites) {
-        const stmt = db.prepare(`
-          INSERT INTO citations (paper_id, citing_bibcode, citing_title, citing_authors, citing_year)
-          VALUES (?, ?, ?, ?, ?)
-        `);
-        stmt.run([paperId, cite.bibcode, cite.title, cite.authors, cite.year]);
-        stmt.free();
-      }
     },
 
     createAnnotation(paperId, annotation) {
@@ -2018,32 +1962,6 @@ ipcMain.handle('ads-lookup', async (event, identifier, type) => {
   }
 });
 
-ipcMain.handle('ads-get-references', async (event, bibcode, options = {}) => {
-  const token = store.get('adsToken');
-  if (!token) return { success: false, error: 'No ADS API token configured' };
-
-  try {
-    // Fetch all references (no practical limit - papers rarely have >500 refs)
-    const refs = await adsApi.getReferences(token, bibcode, { rows: options.limit || 500 });
-    return { success: true, data: refs };
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
-});
-
-ipcMain.handle('ads-get-citations', async (event, bibcode, options = {}) => {
-  const token = store.get('adsToken');
-  if (!token) return { success: false, error: 'No ADS API token configured' };
-
-  try {
-    // Limit citations to 50 (popular papers can have thousands)
-    const cits = await adsApi.getCitations(token, bibcode, { rows: options.limit || 50 });
-    return { success: true, data: cits };
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
-});
-
 // Get available PDF sources for a paper
 ipcMain.handle('ads-get-esources', async (event, bibcode) => {
   const token = store.get('adsToken');
@@ -2459,40 +2377,6 @@ ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
         ...mergedMetadata,
         bibtex: bibtexStr
       }, false);
-
-      // Fetch refs/cites in parallel
-      // Fetch all refs (500 limit), but only 50 cites (popular papers can have thousands)
-      sendConsoleLog(`[${bibcode}] Fetching refs & cites...`, 'info');
-      const [refs, cits] = await Promise.all([
-        adsApi.getReferences(token, adsData.bibcode, { rows: 500 }).catch(e => {
-          sendConsoleLog(`[${bibcode}] Refs fetch failed: ${e?.message || e}`, 'warn');
-          return [];
-        }),
-        adsApi.getCitations(token, adsData.bibcode, { rows: 50 }).catch(e => {
-          sendConsoleLog(`[${bibcode}] Cites fetch failed: ${e?.message || e}`, 'warn');
-          return [];
-        })
-      ]);
-
-      // Filter out any null/undefined entries and map to database format
-      const validRefs = (refs || []).filter(r => r && r.bibcode).map(r => ({
-        bibcode: r.bibcode,
-        title: r.title?.[0],
-        authors: r.author?.join(', '),
-        year: r.year
-      }));
-      database.addReferences(paper.id, validRefs, false);
-
-      const validCites = (cits || []).filter(c => c && c.bibcode).map(c => ({
-        bibcode: c.bibcode,
-        title: c.title?.[0],
-        authors: c.author?.join(', '),
-        year: c.year
-      }));
-      database.addCitations(paper.id, validCites, false);
-
-      // Always log refs/cites count for debugging
-      sendConsoleLog(`[${bibcode}] Refs: ${validRefs.length}, Cites: ${validCites.length}`, validRefs.length > 0 || validCites.length > 0 ? 'success' : 'info');
 
       // Store available PDF sources as metadata (don't download during sync)
       try {
@@ -3204,36 +3088,6 @@ ipcMain.handle('ads-import-papers', async (event, selectedPapers) => {
         available_sources: availableSources.length > 0 ? JSON.stringify(availableSources) : null
       });
 
-      // Fetch and store references/citations
-      // Fetch all refs (500 limit), but only 50 cites (popular papers can have thousands)
-      if (paper.bibcode) {
-        try {
-          sendConsoleLog(`[${paper.bibcode}] Fetching refs & cites...`, 'info');
-          const [refs, cits] = await Promise.all([
-            adsApi.getReferences(token, paper.bibcode, { rows: 500 }).catch(() => []),
-            adsApi.getCitations(token, paper.bibcode, { rows: 50 }).catch(() => [])
-          ]);
-
-          sendConsoleLog(`[${paper.bibcode}] Found ${refs.length} refs, ${cits.length} cites`, 'success');
-
-          database.addReferences(paperId, refs.map(r => ({
-            bibcode: r.bibcode,
-            title: r.title?.[0],
-            authors: r.author?.join(', '),
-            year: r.year
-          })));
-
-          database.addCitations(paperId, cits.map(c => ({
-            bibcode: c.bibcode,
-            title: c.title?.[0],
-            authors: c.author?.join(', '),
-            year: c.year
-          })));
-        } catch (e) {
-          sendConsoleLog(`[${paper.bibcode}] Refs/cites fetch failed`, 'warn');
-        }
-      }
-
       sendConsoleLog(`[${paper.bibcode}] ✓ Imported`, 'success');
       results.imported.push({
         paper,
@@ -3898,38 +3752,6 @@ ipcMain.handle('get-papers-in-collection', (event, collectionId) => {
   }
 
   return database.getPapersInCollection(collectionId);
-});
-
-// ===== References/Citations IPC Handlers =====
-
-ipcMain.handle('get-references', (event, paperId) => {
-  if (!dbInitialized) return [];
-  return database.getReferences(paperId);
-});
-
-ipcMain.handle('get-citations', (event, paperId) => {
-  if (!dbInitialized) return [];
-  return database.getCitations(paperId);
-});
-
-ipcMain.handle('add-references', (event, paperId, refs) => {
-  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
-  try {
-    database.addReferences(paperId, refs);
-    return { success: true };
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
-});
-
-ipcMain.handle('add-citations', (event, paperId, cites) => {
-  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
-  try {
-    database.addCitations(paperId, cites);
-    return { success: true };
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
 });
 
 // ===== LLM IPC Handlers =====
@@ -4711,31 +4533,6 @@ ipcMain.handle('apply-ads-metadata', async (event, paperId, adsDoc) => {
       bibtex: bibtexStr
     });
 
-    // Fetch refs/cites in background
-    // Fetch all refs (500 limit), but only 50 cites (popular papers can have thousands)
-    (async () => {
-      try {
-        const refs = await adsApi.getReferences(token, adsDoc.bibcode, { rows: 500 });
-        const cits = await adsApi.getCitations(token, adsDoc.bibcode, { rows: 50 });
-
-        database.addReferences(paperId, refs.map(r => ({
-          bibcode: r.bibcode,
-          title: r.title?.[0],
-          authors: r.author?.join(', '),
-          year: r.year
-        })));
-
-        database.addCitations(paperId, cits.map(c => ({
-          bibcode: c.bibcode,
-          title: c.title?.[0],
-          authors: c.author?.join(', '),
-          year: c.year
-        })));
-      } catch (e) {
-        console.error('Failed to fetch refs/cites:', e.message);
-      }
-    })();
-
     // Update master.bib
     const libraryPath = store.get('libraryPath');
     const allPapers = database.getAllPapers();
@@ -4813,40 +4610,6 @@ ipcMain.handle('import-single-from-ads', async (event, adsDoc) => {
       bibtex: bibtexStr,
       available_sources: availableSources.length > 0 ? JSON.stringify(availableSources) : null
     });
-
-    // Fetch and store references/citations
-    // Fetch all refs (500 limit), but only 50 cites (popular papers can have thousands)
-    if (adsDoc.bibcode) {
-      try {
-        sendConsoleLog(`[${paper.bibcode}] Fetching refs & cites...`, 'info');
-        const [refs, cits] = await Promise.all([
-          adsApi.getReferences(token, adsDoc.bibcode, { rows: 500 }).catch(e => {
-            return [];
-          }),
-          adsApi.getCitations(token, adsDoc.bibcode, { rows: 50 }).catch(e => {
-            return [];
-          })
-        ]);
-
-        sendConsoleLog(`[${paper.bibcode}] Found ${refs.length} refs, ${cits.length} cites`, 'success');
-
-        database.addReferences(paperId, refs.map(r => ({
-          bibcode: r.bibcode,
-          title: r.title?.[0],
-          authors: r.author?.join(', '),
-          year: r.year
-        })));
-
-        database.addCitations(paperId, cits.map(c => ({
-          bibcode: c.bibcode,
-          title: c.title?.[0],
-          authors: c.author?.join(', '),
-          year: c.year
-        })));
-      } catch (e) {
-        sendConsoleLog(`[${paper.bibcode}] Refs/cites fetch failed`, 'warn');
-      }
-    }
 
     // Update master.bib
     const allPapers = database.getAllPapers();

@@ -33,28 +33,6 @@ CREATE TABLE IF NOT EXISTS papers (
   citation_count INTEGER DEFAULT 0
 );
 
--- References table - papers this paper cites
-CREATE TABLE IF NOT EXISTS refs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  paper_id INTEGER,
-  ref_bibcode TEXT,
-  ref_title TEXT,
-  ref_authors TEXT,
-  ref_year INTEGER,
-  FOREIGN KEY (paper_id) REFERENCES papers(id)
-);
-
--- Citations table - papers that cite this paper
-CREATE TABLE IF NOT EXISTS citations (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  paper_id INTEGER,
-  citing_bibcode TEXT,
-  citing_title TEXT,
-  citing_authors TEXT,
-  citing_year INTEGER,
-  FOREIGN KEY (paper_id) REFERENCES papers(id)
-);
-
 -- Collections table - user-defined folders
 CREATE TABLE IF NOT EXISTS collections (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -196,8 +174,6 @@ CREATE INDEX IF NOT EXISTS idx_papers_arxiv ON papers(arxiv_id);
 CREATE INDEX IF NOT EXISTS idx_papers_year ON papers(year);
 CREATE INDEX IF NOT EXISTS idx_papers_status ON papers(read_status);
 CREATE INDEX IF NOT EXISTS idx_papers_rating ON papers(rating);
-CREATE INDEX IF NOT EXISTS idx_refs_paper ON refs(paper_id);
-CREATE INDEX IF NOT EXISTS idx_citations_paper ON citations(paper_id);
 CREATE INDEX IF NOT EXISTS idx_annotations_paper ON annotations(paper_id);
 CREATE INDEX IF NOT EXISTS idx_embeddings_paper ON text_embeddings(paper_id);
 CREATE INDEX IF NOT EXISTS idx_qa_paper ON paper_qa(paper_id);

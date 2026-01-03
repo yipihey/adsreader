@@ -41,6 +41,7 @@ class ADSReader {
     this.refsQueryBibcode = null;      // Bibcode we're viewing refs for
     this.citesQueryBibcode = null;     // Bibcode we're viewing cites for
     this.refsQuerySourcePaper = null;  // Paper we came from (for back navigation)
+    this.refsCitesNavStack = [];       // Navigation stack for multi-level refs/cites
     this.refsCache = new Map();        // bibcode -> {papers: [], count: n}
     this.citesCache = new Map();       // bibcode -> {papers: [], count: n}
 
@@ -9680,10 +9681,25 @@ class ADSReader {
   async executeRefsQuery(bibcode, sourcePaper) {
     if (!bibcode) return;
 
+    // Push current state to navigation stack if already in refs/cites mode
+    if (this.isRefsCitesMode()) {
+      this.refsCitesNavStack.push({
+        type: this.refsQueryBibcode ? 'refs' : 'cites',
+        bibcode: this.refsQueryBibcode || this.citesQueryBibcode,
+        sourcePaper: this.refsQuerySourcePaper,
+        papers: [...this.papers],
+        selectedPaperId: this.selectedPaper?.id || this.selectedPaper?.bibcode
+      });
+    }
+
     // Store source paper for back navigation
     this.refsQuerySourcePaper = sourcePaper;
     this.refsQueryBibcode = bibcode;
     this.citesQueryBibcode = null;
+
+    // Store query for "Save as Smart Search"
+    this.currentAdsQuery = `references(bibcode:"${bibcode}")`;
+    this.currentAdsNLQuery = `References of ${sourcePaper?.title || bibcode}`;
 
     // Check cache first
     if (this.refsCache.has(bibcode)) {
@@ -9725,10 +9741,25 @@ class ADSReader {
   async executeCitesQuery(bibcode, sourcePaper) {
     if (!bibcode) return;
 
+    // Push current state to navigation stack if already in refs/cites mode
+    if (this.isRefsCitesMode()) {
+      this.refsCitesNavStack.push({
+        type: this.refsQueryBibcode ? 'refs' : 'cites',
+        bibcode: this.refsQueryBibcode || this.citesQueryBibcode,
+        sourcePaper: this.refsQuerySourcePaper,
+        papers: [...this.papers],
+        selectedPaperId: this.selectedPaper?.id || this.selectedPaper?.bibcode
+      });
+    }
+
     // Store source paper for back navigation
     this.refsQuerySourcePaper = sourcePaper;
     this.citesQueryBibcode = bibcode;
     this.refsQueryBibcode = null;
+
+    // Store query for "Save as Smart Search"
+    this.currentAdsQuery = `citations(bibcode:"${bibcode}")`;
+    this.currentAdsNLQuery = `Citations of ${sourcePaper?.title || bibcode}`;
 
     // Check cache first
     if (this.citesCache.has(bibcode)) {
@@ -9806,34 +9837,52 @@ class ADSReader {
   showRefsCitesHeader(type, sourcePaper, count) {
     // Show the refs/cites navigation header
     let header = document.getElementById('refs-cites-header');
+    const typeLabel = type === 'refs' ? 'References' : 'Citations';
+
+    // Format paper info for display
+    const title = sourcePaper?.title?.substring(0, 40) + (sourcePaper?.title?.length > 40 ? '...' : '') || 'Unknown';
+    const bibstem = this.extractBibstem(sourcePaper?.bibcode) || '';
+    const authors = this.formatAuthorsShort(sourcePaper?.authors);
+    const year = sourcePaper?.year || '';
+
+    // Build paper description: Title · Bibstem · Authors (Year)
+    const paperDesc = [title, bibstem, authors, year ? `(${year})` : ''].filter(Boolean).join(' · ');
+
     if (!header) {
       // Create header if it doesn't exist
       header = document.createElement('div');
       header.id = 'refs-cites-header';
       header.className = 'refs-cites-header';
-      header.innerHTML = `
-        <button class="refs-cites-back-btn" title="Back to paper">←</button>
-        <span class="refs-cites-context"></span>
-        <span class="refs-cites-count"></span>
-      `;
 
       // Insert at top of papers container
       const papersContainer = document.getElementById('papers-container');
       if (papersContainer) {
         papersContainer.insertBefore(header, papersContainer.firstChild);
       }
-
-      // Add click handler for back button
-      header.querySelector('.refs-cites-back-btn').addEventListener('click', () => {
-        this.exitRefsCitesMode();
-      });
     }
 
-    // Update header content
-    const typeLabel = type === 'refs' ? 'References' : 'Citations';
-    const titleShort = sourcePaper?.title?.substring(0, 50) + (sourcePaper?.title?.length > 50 ? '...' : '') || 'Unknown';
-    header.querySelector('.refs-cites-context').textContent = `${typeLabel} of: "${titleShort}"`;
-    header.querySelector('.refs-cites-count').textContent = `${count} papers`;
+    // Update header HTML with new layout
+    header.innerHTML = `
+      <div class="refs-cites-info">
+        <span class="refs-cites-type">${typeLabel} of:</span>
+        <span class="refs-cites-paper" title="${sourcePaper?.title || ''}">${paperDesc}</span>
+        <span class="refs-cites-count">${count} papers</span>
+      </div>
+      <div class="refs-cites-actions">
+        <button class="refs-cites-save-btn" title="Save as Smart Search">💾</button>
+        <button class="refs-cites-close-btn" title="Close">✕</button>
+      </div>
+    `;
+
+    // Add click handlers
+    header.querySelector('.refs-cites-close-btn').addEventListener('click', () => {
+      this.exitRefsCitesMode();
+    });
+
+    header.querySelector('.refs-cites-save-btn').addEventListener('click', () => {
+      this.saveAdsSearchAsSmartSearch();
+    });
+
     header.classList.remove('hidden');
   }
 
@@ -9845,9 +9894,41 @@ class ADSReader {
   }
 
   exitRefsCitesMode() {
-    // Clear refs/cites query state
+    // Pop from navigation stack if not empty
+    if (this.refsCitesNavStack.length > 0) {
+      const prevState = this.refsCitesNavStack.pop();
+
+      // Restore previous refs/cites view
+      this.papers = prevState.papers;
+      this.refsQueryBibcode = prevState.type === 'refs' ? prevState.bibcode : null;
+      this.citesQueryBibcode = prevState.type === 'cites' ? prevState.bibcode : null;
+      this.refsQuerySourcePaper = prevState.sourcePaper;
+
+      // Restore query for "Save as Smart Search"
+      const queryType = prevState.type === 'refs' ? 'references' : 'citations';
+      this.currentAdsQuery = `${queryType}(bibcode:"${prevState.bibcode}")`;
+      this.currentAdsNLQuery = `${prevState.type === 'refs' ? 'References' : 'Citations'} of ${prevState.sourcePaper?.title || prevState.bibcode}`;
+
+      // Update header and render
+      this.showRefsCitesHeader(prevState.type, prevState.sourcePaper, prevState.papers.length);
+      this.renderPaperList();
+
+      // Restore selection
+      if (prevState.selectedPaperId) {
+        setTimeout(() => {
+          const paper = this.papers.find(p => p.id === prevState.selectedPaperId || p.bibcode === prevState.selectedPaperId);
+          if (paper) {
+            this.selectPaper(paper);
+          }
+        }, 50);
+      }
+      return;
+    }
+
+    // Stack empty - return to library
     this.refsQueryBibcode = null;
     this.citesQueryBibcode = null;
+    this.refsCitesNavStack = [];
 
     // Hide header
     this.hideRefsCitesHeader();
@@ -9877,6 +9958,27 @@ class ADSReader {
   // Check if we're in refs/cites mode
   isRefsCitesMode() {
     return this.refsQueryBibcode !== null || this.citesQueryBibcode !== null;
+  }
+
+  // Extract bibstem (journal abbreviation) from bibcode
+  extractBibstem(bibcode) {
+    if (!bibcode || bibcode.length < 9) return '';
+    // Bibcode format: YYYYJJJJJVVVVMPPPPA
+    // JJJJJ is the journal abbreviation (chars 4-8, 0-indexed)
+    return bibcode.substring(4, 9).replace(/\./g, '').trim();
+  }
+
+  // Format authors for short display in header
+  formatAuthorsShort(authors) {
+    if (!authors) return '';
+    const authorList = authors.split(';').map(a => a.trim());
+    if (authorList.length === 0) return '';
+    // Extract last name only (before comma)
+    const lastName1 = authorList[0].split(',')[0];
+    if (authorList.length === 1) return lastName1;
+    const lastName2 = authorList[1].split(',')[0];
+    if (authorList.length === 2) return `${lastName1}, ${lastName2}`;
+    return `${lastName1}, ${lastName2} et al.`;
   }
 
   showAdsPaneError(message) {

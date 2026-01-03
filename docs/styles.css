@@ -256,7 +256,7 @@ h3 { font-size: 1.25rem; }
   opacity: 0.5;
 }
 
-.screenshot-img.loaded {
+.screenshot-img {
   width: 100%;
   border-radius: 12px;
   box-shadow: 0 20px 60px var(--shadow-lg);

@@ -9840,7 +9840,8 @@ class ADSReader {
     const typeLabel = type === 'refs' ? 'References' : 'Citations';
 
     // Format paper info for display
-    const title = sourcePaper?.title?.substring(0, 40) + (sourcePaper?.title?.length > 40 ? '...' : '') || 'Unknown';
+    const rawTitle = sourcePaper?.title || '';
+    const title = rawTitle ? (rawTitle.substring(0, 40) + (rawTitle.length > 40 ? '...' : '')) : 'Unknown';
     const bibstem = this.extractBibstem(sourcePaper?.bibcode) || '';
     const authors = this.formatAuthorsShort(sourcePaper?.authors);
     const year = sourcePaper?.year || '';

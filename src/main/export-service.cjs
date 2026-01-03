@@ -245,6 +245,19 @@ async function exportLibrary(options, database, libraryPath, savePath, progressC
         order: sortOrder || 'desc'
       };
 
+      // Add smart searches (ADS saved searches)
+      if (database.getAllSmartSearches) {
+        const smartSearches = database.getAllSmartSearches();
+        libraryData.smartSearches = smartSearches.map(s => ({
+          name: s.name,
+          query: s.query,
+          sort_order: s.sort_order,
+          display_order: s.display_order,
+          created_date: s.created_date
+          // Don't export runtime data: last_refresh_date, result_count, error_message
+        }));
+      }
+
       // Add library.json to archive
       archive.append(JSON.stringify(libraryData, null, 2), { name: 'library.json' });
 
@@ -253,6 +266,7 @@ async function exportLibrary(options, database, libraryPath, savePath, progressC
       const stats = {
         paperCount: papers.length,
         collectionCount: collections.length,
+        smartSearchCount: (libraryData.smartSearches || []).length,
         pdfCount: 0,
         annotationCount: 0,
         refCount: Object.values(libraryData.refs).reduce((sum, refs) => sum + refs.length, 0),
@@ -445,6 +459,13 @@ async function importLibrary(options, database, libraryPath, progressCallback) {
         for (const coll of existingCollections) {
           database.deleteCollection(coll.id);
         }
+        // Clear smart searches too
+        if (database.getAllSmartSearches && database.deleteSmartSearch) {
+          const existingSearches = database.getAllSmartSearches();
+          for (const search of existingSearches) {
+            database.deleteSmartSearch(search.id);
+          }
+        }
         database.saveDatabase();
       }
 
@@ -586,6 +607,28 @@ async function importLibrary(options, database, libraryPath, progressCallback) {
             } catch (e) {
               // Ignore rotation errors
             }
+          }
+        }
+      }
+
+      // Import smart searches (ADS saved searches)
+      if (database.createSmartSearch) {
+        const smartSearches = libraryData.smartSearches || [];
+        results.smartSearchesImported = 0;
+        for (const search of smartSearches) {
+          try {
+            const newId = database.createSmartSearch({
+              name: search.name,
+              query: search.query,
+              sortOrder: search.sort_order || 'date desc'
+            });
+            // Update display_order if provided
+            if (search.display_order !== undefined && database.updateSmartSearch) {
+              database.updateSmartSearch(newId, { display_order: search.display_order });
+            }
+            results.smartSearchesImported++;
+          } catch (e) {
+            results.errors.push(`Failed to import smart search: ${search.name} - ${e.message}`);
           }
         }
       }

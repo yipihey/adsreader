@@ -49,11 +49,15 @@ module.exports = {
       /node_modules\/electron-winstaller/,
     ],
     // macOS code signing configuration
-    // Uses environment variables for flexibility between dev and CI environments
     osxSign: {
-      identity: 'Developer ID Application: THOMAS G ABEL (QG3MEYVHMS)'
+      identity: '41E5E82BC20BF8E0FA6D7DFAF2779128C380B2E5', // Developer ID Application: THOMAS G ABEL
+      hardenedRuntime: true,
+      entitlements: 'entitlements.mac.plist',
+      'entitlements-inherit': 'entitlements.mac.plist',
+      'gatekeeper-assess': false,
+      strictVerify: false
     },
-    // macOS notarization - disabled during make, done manually after
+    // macOS notarization - done manually after build
     // osxNotarize: {
     //   keychainProfile: 'ADS-Reader-Notarize'
     // },

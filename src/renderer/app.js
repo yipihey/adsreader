@@ -1828,11 +1828,13 @@ class ADSReader {
     // If fileId starts with 'source-', delete the PDF source
     if (fileId.startsWith('source-')) {
       const sourceType = fileId.replace('source-', '');
-      const deleted = await window.electronAPI.deletePdfSource(paperId, sourceType);
+      const deleted = await window.electronAPI.deletePdf(paperId, sourceType);
       if (deleted) {
         this.consoleLog(`Deleted ${this.getSourceLabel(sourceType)} PDF`, 'info');
         const paper = this.papers.find(p => p.id === paperId);
         if (paper) await this.renderFilesPanel(paper);
+      } else {
+        this.consoleLog(`Failed to delete ${this.getSourceLabel(sourceType)} PDF`, 'error');
       }
     } else if (fileId.startsWith('att-')) {
       // Delete attachment

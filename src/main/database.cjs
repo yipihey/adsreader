@@ -5,6 +5,7 @@ const initSqlJs = require('sql.js');
 const fs = require('fs');
 const path = require('path');
 const { applySchema } = require('../shared/database-schema.cjs');
+const { applySchemaV2 } = require('../lib/database/schema-v2.cjs');
 
 /**
  * @typedef {Object} Paper
@@ -80,6 +81,8 @@ async function initDatabase(libraryPath) {
 // Create database schema using shared definition
 function createSchema() {
   applySchema(db);
+  // Apply V2 schema (plugin data tables: paper_sources, paper_references, paper_citations)
+  applySchemaV2(db);
 }
 
 // Save database to file
@@ -1677,6 +1680,152 @@ function checkBibcodesInReadingList(bibcodes) {
   return results[0].values.map(row => row[0]);
 }
 
+// ============================================================================
+// PLUGIN DATA ARCHITECTURE (Schema V2)
+// Paper sources, cached references/citations, deduplication
+// ============================================================================
+
+const schemaV2 = require('../lib/database/schema-v2.cjs');
+
+/**
+ * Add a source link for a paper
+ * @param {Object} params - Source parameters
+ * @returns {number} Source link ID
+ */
+function addPaperSource(params) {
+  const result = schemaV2.addPaperSource(db, params);
+  saveDatabase();
+  return result;
+}
+
+/**
+ * Get all source links for a paper
+ * @param {number} paperId
+ * @returns {Array}
+ */
+function getPaperSources(paperId) {
+  return schemaV2.getPaperSources(db, paperId);
+}
+
+/**
+ * Find best source for getting references
+ * @param {Array} sources
+ * @returns {Object|null}
+ */
+function findBestSourceForRefs(sources) {
+  return schemaV2.findBestSourceForRefs(sources);
+}
+
+/**
+ * Find best source for getting citations
+ * @param {Array} sources
+ * @returns {Object|null}
+ */
+function findBestSourceForCites(sources) {
+  return schemaV2.findBestSourceForCites(sources);
+}
+
+/**
+ * Find paper by DOI (for deduplication)
+ * @param {string} doi
+ * @returns {Object|null}
+ */
+function findPaperByDOI(doi) {
+  return schemaV2.findPaperByDOI(db, doi);
+}
+
+/**
+ * Find paper by arXiv ID (for deduplication)
+ * @param {string} arxivId
+ * @returns {Object|null}
+ */
+function findPaperByArxiv(arxivId) {
+  return schemaV2.findPaperByArxiv(db, arxivId);
+}
+
+/**
+ * Find or create a paper with deduplication
+ * @param {Object} paperData
+ * @param {string} source
+ * @param {string} sourceId
+ * @param {Object} capabilities
+ * @returns {{paper: Object, isNew: boolean}}
+ */
+function findOrCreatePaper(paperData, source, sourceId, capabilities) {
+  const result = schemaV2.findOrCreatePaper(db, paperData, source, sourceId, capabilities);
+  if (!result.isNew) {
+    saveDatabase();
+  }
+  return result;
+}
+
+/**
+ * Cache references for a paper
+ * @param {number} paperId
+ * @param {Array} refs
+ * @param {string} sourcePlugin
+ */
+function cacheReferences(paperId, refs, sourcePlugin) {
+  schemaV2.cacheReferences(db, paperId, refs, sourcePlugin);
+  saveDatabase();
+}
+
+/**
+ * Get cached references for a paper
+ * @param {number} paperId
+ * @returns {{refs: Array, sourcePlugin: string, cachedAt: string, isStale: boolean}}
+ */
+function getCachedReferences(paperId) {
+  return schemaV2.getCachedReferences(db, paperId);
+}
+
+/**
+ * Cache citations for a paper
+ * @param {number} paperId
+ * @param {Array} cites
+ * @param {string} sourcePlugin
+ */
+function cacheCitations(paperId, cites, sourcePlugin) {
+  schemaV2.cacheCitations(db, paperId, cites, sourcePlugin);
+  saveDatabase();
+}
+
+/**
+ * Get cached citations for a paper
+ * @param {number} paperId
+ * @returns {{cites: Array, sourcePlugin: string, cachedAt: string, isStale: boolean}}
+ */
+function getCachedCitations(paperId) {
+  return schemaV2.getCachedCitations(db, paperId);
+}
+
+/**
+ * Update library links after adding a paper
+ * @param {number} paperId
+ */
+function updateLibraryLinks(paperId) {
+  schemaV2.updateLibraryLinks(db, paperId);
+  saveDatabase();
+}
+
+/**
+ * Check if cache is stale
+ * @param {string} cachedAt - ISO date string
+ * @returns {boolean}
+ */
+function isCacheStale(cachedAt) {
+  return schemaV2.isCacheStale(cachedAt);
+}
+
+/**
+ * Get days since a date
+ * @param {string} dateStr - ISO date string
+ * @returns {number}
+ */
+function daysSince(dateStr) {
+  return schemaV2.daysSince(dateStr);
+}
+
 module.exports = {
   initDatabase,
   closeDatabase,
@@ -1755,5 +1904,20 @@ module.exports = {
   isInReadingList,
   updateReadingListPaper,
   getReadingListCount,
-  checkBibcodesInReadingList
+  checkBibcodesInReadingList,
+  // Plugin Data Architecture (Schema V2)
+  addPaperSource,
+  getPaperSources,
+  findBestSourceForRefs,
+  findBestSourceForCites,
+  findPaperByDOI,
+  findPaperByArxiv,
+  findOrCreatePaper,
+  cacheReferences,
+  getCachedReferences,
+  cacheCitations,
+  getCachedCitations,
+  updateLibraryLinks,
+  isCacheStale,
+  daysSince
 };

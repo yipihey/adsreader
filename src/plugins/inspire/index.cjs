@@ -364,7 +364,8 @@ const inspirePlugin = {
     citations: true,    // INSPIRE provides citation data
     pdfDownload: true,  // Via arXiv links
     bibtex: true,
-    metadata: true
+    metadata: true,
+    priority: 20  // Middle priority - has refs/cites, good for HEP
   },
 
   searchCapabilities: {
@@ -379,6 +380,54 @@ const inspirePlugin = {
     queryLanguage: 'inspire',
     sortOptions: ['date', 'citations', 'relevance']
   },
+
+  // Search UI configuration
+  searchConfig: {
+    title: 'Search INSPIRE HEP',
+    placeholder: 'e.g., a witten t "string theory" date 2020',
+    nlPlaceholder: 'e.g., papers by Witten about supersymmetry...',
+    shortcuts: [
+      { label: 'a (author)', insert: 'a ' },
+      { label: 't (title)', insert: 't ' },
+      { label: 'ab (abstract)', insert: 'ab ' },
+      { label: 'date', insert: 'date ' },
+      { label: 'eprint', insert: 'eprint ' },
+      { label: 'topcite', insert: 'topcite ' }
+    ],
+    exampleSearches: [
+      { label: 'Witten string theory', query: 'a witten and t "string theory"' },
+      { label: 'Recent supersymmetry', query: 'ab supersymmetry and date 2023' },
+      { label: 'Highly cited HEP', query: 'topcite 1000+ and date 2020->' },
+      { label: 'LHC Higgs papers', query: 't higgs and j "JHEP"' }
+    ]
+  },
+
+  // Query templates for refs/cites
+  queryTemplates: {
+    references: 'citedby:recid:{id}',
+    citations: 'refersto:recid:{id}'
+  },
+
+  // Natural language translation prompt
+  nlPrompt: `You translate a user's natural-language request about scholarly literature into one INSPIRE HEP search query string.
+
+INSPIRE Query Syntax:
+- Author: a <surname> or au <surname>
+- Title words: t "<phrase>" or ti "<phrase>"
+- Abstract: ab <terms>
+- arXiv ID: eprint <id>
+- DOI: doi <value>
+- Journal: j "<abbreviated name>"
+- Year: date <year> or date <start>-><end>
+- Citations: topcite <N>+ (at least N citations)
+- Combine with: and, or, not
+
+Examples:
+- "papers by Witten on string theory" → a witten and t "string theory"
+- "supersymmetry papers from 2023 with 100+ citations" → ab supersymmetry and date 2023 and topcite 100+
+- "ATLAS collaboration Higgs papers" → a ATLAS and t higgs
+
+Return ONLY the query string, no explanation.`,
 
   auth: {
     type: 'none',
@@ -702,11 +751,13 @@ const inspirePlugin = {
   // ===========================================================================
 
   /**
-   * Get the web URL for a paper
-   * @param {string} recid - INSPIRE record ID
-   * @returns {string}
+   * Get URL to view paper on INSPIRE website
+   * @param {Object} paper - Paper object with _inspire.recid or sourceId
+   * @returns {string} URL to INSPIRE abstract page
    */
-  getWebUrl(recid) {
+  getRecordUrl(paper) {
+    const recid = paper._inspire?.recid || paper.sourceId || paper.inspire_recid;
+    if (!recid) return null;
     return `https://inspirehep.net/literature/${recid}`;
   }
 };

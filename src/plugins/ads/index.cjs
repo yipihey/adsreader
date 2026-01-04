@@ -203,7 +203,8 @@ const adsPlugin = {
     citations: true,
     pdfDownload: true,
     bibtex: true,
-    metadata: true
+    metadata: true,
+    priority: 10 // Highest priority - primary source for astronomy
   },
 
   searchCapabilities: {
@@ -217,6 +218,54 @@ const adsPlugin = {
     queryLanguage: 'ads',
     sortOptions: ['date', 'citations', 'relevance']
   },
+
+  // Search UI configuration
+  searchConfig: {
+    title: 'Search NASA ADS',
+    placeholder: 'e.g., author:smith year:2020-2024 galaxy',
+    nlPlaceholder: 'e.g., papers by Smith about galaxy formation...',
+    shortcuts: [
+      { label: 'author:', insert: 'author:' },
+      { label: 'title:', insert: 'title:' },
+      { label: 'year:', insert: 'year:' },
+      { label: 'abs:', insert: 'abs:' },
+      { label: 'bibcode:', insert: 'bibcode:' },
+      { label: 'arXiv:', insert: 'arxiv:' }
+    ],
+    exampleSearches: [
+      { label: 'Recent cosmology', query: 'abs:cosmology year:2023-2024' },
+      { label: 'Galaxy formation reviews', query: 'title:"galaxy formation" doctype:review' },
+      { label: 'Highly cited 2023', query: 'year:2023 citations:[100 TO *]' },
+      { label: 'First author Smith', query: 'author:"^Smith" year:2020-2024' }
+    ]
+  },
+
+  // Query templates for refs/cites
+  queryTemplates: {
+    references: 'references(bibcode:"{id}")',
+    citations: 'citations(bibcode:"{id}")'
+  },
+
+  // Natural language translation prompt
+  nlPrompt: `You translate a user's natural-language request about scholarly literature into one NASA ADS search query string.
+
+ADS Query Syntax:
+- Author: author:"surname" or author:"^surname" (first author)
+- Title words: title:"phrase"
+- Abstract: abs:"terms"
+- Year: year:YYYY or year:YYYY-YYYY
+- arXiv ID: arxiv:XXXX.XXXXX
+- DOI: doi:"value"
+- Bibcode: bibcode:"value"
+- Citations: citations:[N TO *] (at least N citations)
+- Combine with: AND, OR, NOT (or space for AND)
+
+Examples:
+- "papers by Witten on string theory" → author:witten title:"string theory"
+- "galaxy formation papers from 2023 with 50+ citations" → abs:"galaxy formation" year:2023 citations:[50 TO *]
+- "reviews about dark matter" → abs:"dark matter" doctype:review
+
+Return ONLY the query string, no explanation.`,
 
   // Authentication
   auth: {
@@ -530,6 +579,17 @@ const adsPlugin = {
    */
   getStats() {
     return adsApi.getSyncStats();
+  },
+
+  /**
+   * Get URL to view paper on ADS website
+   * @param {Object} paper - Paper object with bibcode
+   * @returns {string} URL to ADS abstract page
+   */
+  getRecordUrl(paper) {
+    const bibcode = paper.bibcode || paper.sourceId;
+    if (!bibcode) return null;
+    return `https://ui.adsabs.harvard.edu/abs/${encodeURIComponent(bibcode)}/abstract`;
   }
 };
 

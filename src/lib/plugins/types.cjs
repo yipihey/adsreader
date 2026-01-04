@@ -95,12 +95,34 @@
 /**
  * @typedef {Object} PluginCapabilities
  * @property {boolean} search - Can search for papers
- * @property {boolean} lookup - Can lookup by identifier
+ * @property {boolean} lookup - Can lookup by identifier (DOI, arXiv, etc.)
  * @property {boolean} references - Can get paper references
  * @property {boolean} citations - Can get citing papers
  * @property {boolean} pdfDownload - Can download PDFs
  * @property {boolean} bibtex - Can export BibTeX
  * @property {boolean} metadata - Can enrich paper metadata
+ * @property {number} [priority] - Plugin priority for source selection (lower = preferred, default 50)
+ */
+
+/**
+ * Search bar configuration for a plugin.
+ * The main app uses this to render source-specific UI without hardcoding plugin IDs.
+ *
+ * @typedef {Object} SearchConfig
+ * @property {string} title - Title for the search pane (e.g., "Search NASA ADS")
+ * @property {string} placeholder - Placeholder text for search input
+ * @property {string} [nlPlaceholder] - Placeholder for natural language input
+ * @property {Array<{label: string, insert: string}>} shortcuts - Query shortcuts to display
+ * @property {Array<{label: string, query: string}>} exampleSearches - Example searches
+ */
+
+/**
+ * Query templates for building source-specific queries.
+ * These templates use {id}, {bibcode}, {doi} placeholders.
+ *
+ * @typedef {Object} QueryTemplates
+ * @property {string} [references] - Template for refs query (e.g., "references(bibcode:\"{id}\")")
+ * @property {string} [citations] - Template for cites query (e.g., "citations(bibcode:\"{id}\")")
  */
 
 /**
@@ -134,6 +156,8 @@
  * @property {PluginCapabilities} capabilities - What this plugin can do
  * @property {SearchCapabilities} searchCapabilities - Search feature details
  * @property {AuthConfig} auth - Authentication requirements
+ * @property {SearchConfig} [searchConfig] - UI config for search bar
+ * @property {QueryTemplates} [queryTemplates] - Templates for building queries
  *
  * @property {function(): Promise<boolean>} validateAuth - Check if auth is valid
  * @property {function(): RateLimitStatus} getRateLimitStatus - Get current rate limit
@@ -154,6 +178,9 @@
  *
  * @property {function(string): Promise<string>} [getBibtex] - Get BibTeX for paper
  * @property {function(string[]): Promise<Map<string,string>>} [getBibtexBatch] - Batch BibTeX
+ *
+ * @property {function(Object): string} [getRecordUrl] - Get URL to view paper on source website
+ * @property {string} [nlPrompt] - Natural language translation prompt for this source
  *
  * @property {function(): Promise<void>} [initialize] - Called when plugin is loaded
  * @property {function(): Promise<void>} [shutdown] - Called when plugin is unloaded

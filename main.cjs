@@ -7127,6 +7127,441 @@ ipcMain.handle('plugin:get-bibtex', async (event, { pluginId, sourceId }) => {
   }
 });
 
+/**
+ * Get URL to view paper on source website
+ * This allows the renderer to get web URLs without hardcoding source-specific patterns
+ * Args: { pluginId: string, paper: Object }
+ * Returns: { success: boolean, url?: string, error?: string }
+ */
+ipcMain.handle('plugin:get-record-url', async (event, { pluginId, paper }) => {
+  try {
+    const plugin = pluginManager.get(pluginId);
+    if (!plugin) {
+      return { success: false, error: `Plugin "${pluginId}" not found` };
+    }
+    if (typeof plugin.getRecordUrl !== 'function') {
+      // Fallback: return homepage if available
+      if (plugin.homepage) {
+        return { success: true, url: plugin.homepage };
+      }
+      return { success: false, error: `Plugin "${pluginId}" has no getRecordUrl method` };
+    }
+    const url = plugin.getRecordUrl(paper);
+    return { success: true, url };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+/**
+ * Get search UI configuration for a plugin
+ * Returns shortcuts, placeholder text, example searches for the search bar
+ * Args: { pluginId: string }
+ * Returns: { success: boolean, data?: SearchConfig, error?: string }
+ */
+ipcMain.handle('plugin:get-search-config', async (event, { pluginId }) => {
+  try {
+    const plugin = pluginManager.get(pluginId);
+    if (!plugin) {
+      return { success: false, error: `Plugin "${pluginId}" not found` };
+    }
+
+    // Return plugin's searchConfig or generate default
+    const config = plugin.searchConfig || {
+      title: `Search ${plugin.name}`,
+      placeholder: 'Enter search query...',
+      nlPlaceholder: 'Describe what you want to find...',
+      shortcuts: [],
+      exampleSearches: []
+    };
+
+    return { success: true, data: config };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+/**
+ * Get natural language translation prompt for a plugin
+ * Args: { pluginId: string }
+ * Returns: { success: boolean, prompt?: string, error?: string }
+ */
+ipcMain.handle('plugin:get-nl-prompt', async (event, { pluginId }) => {
+  try {
+    const plugin = pluginManager.get(pluginId);
+    if (!plugin) {
+      return { success: false, error: `Plugin "${pluginId}" not found` };
+    }
+
+    const prompt = plugin.nlPrompt || null;
+    return { success: true, prompt };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+/**
+ * Get query templates for a plugin (for refs/cites queries)
+ * Args: { pluginId: string }
+ * Returns: { success: boolean, data?: QueryTemplates, error?: string }
+ */
+ipcMain.handle('plugin:get-query-templates', async (event, { pluginId }) => {
+  try {
+    const plugin = pluginManager.get(pluginId);
+    if (!plugin) {
+      return { success: false, error: `Plugin "${pluginId}" not found` };
+    }
+
+    const templates = plugin.queryTemplates || {
+      references: null,
+      citations: null
+    };
+
+    return { success: true, data: templates };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// =============================================================================
+// Plugin Data Architecture (Schema V2) - Paper Sources, Cached Refs/Cites
+// =============================================================================
+
+/**
+ * Add a source link for a paper
+ */
+ipcMain.handle('plugin-data:add-source', async (event, params) => {
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+  try {
+    const id = database.addPaperSource(params);
+    return { success: true, data: { id } };
+  } catch (error) {
+    console.error('[plugin-data:add-source] Error:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+/**
+ * Get all source links for a paper
+ */
+ipcMain.handle('plugin-data:get-sources', async (event, { paperId }) => {
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+  try {
+    const sources = database.getPaperSources(paperId);
+    return { success: true, data: sources };
+  } catch (error) {
+    console.error('[plugin-data:get-sources] Error:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+/**
+ * Find paper by DOI (for deduplication)
+ */
+ipcMain.handle('plugin-data:find-by-doi', async (event, { doi }) => {
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+  try {
+    const paper = database.findPaperByDOI(doi);
+    return { success: true, data: paper };
+  } catch (error) {
+    console.error('[plugin-data:find-by-doi] Error:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+/**
+ * Find paper by arXiv ID (for deduplication)
+ */
+ipcMain.handle('plugin-data:find-by-arxiv', async (event, { arxivId }) => {
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+  try {
+    const paper = database.findPaperByArxiv(arxivId);
+    return { success: true, data: paper };
+  } catch (error) {
+    console.error('[plugin-data:find-by-arxiv] Error:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+/**
+ * Cache references for a paper
+ */
+ipcMain.handle('plugin-data:cache-refs', async (event, { paperId, refs, sourcePlugin }) => {
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+  try {
+    database.cacheReferences(paperId, refs, sourcePlugin);
+    return { success: true };
+  } catch (error) {
+    console.error('[plugin-data:cache-refs] Error:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+/**
+ * Get cached references for a paper
+ */
+ipcMain.handle('plugin-data:get-cached-refs', async (event, { paperId }) => {
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+  try {
+    const result = database.getCachedReferences(paperId);
+    return { success: true, data: result };
+  } catch (error) {
+    console.error('[plugin-data:get-cached-refs] Error:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+/**
+ * Cache citations for a paper
+ */
+ipcMain.handle('plugin-data:cache-cites', async (event, { paperId, cites, sourcePlugin }) => {
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+  try {
+    database.cacheCitations(paperId, cites, sourcePlugin);
+    return { success: true };
+  } catch (error) {
+    console.error('[plugin-data:cache-cites] Error:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+/**
+ * Get cached citations for a paper
+ */
+ipcMain.handle('plugin-data:get-cached-cites', async (event, { paperId }) => {
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+  try {
+    const result = database.getCachedCitations(paperId);
+    return { success: true, data: result };
+  } catch (error) {
+    console.error('[plugin-data:get-cached-cites] Error:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+/**
+ * Update library links after adding a paper
+ * This updates cached refs/cites to mark papers that are now in library
+ */
+ipcMain.handle('plugin-data:update-library-links', async (event, { paperId }) => {
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+  try {
+    database.updateLibraryLinks(paperId);
+    return { success: true };
+  } catch (error) {
+    console.error('[plugin-data:update-library-links] Error:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+/**
+ * Get references for a library paper with smart caching
+ * - Returns cached refs if fresh (< 7 days)
+ * - Fetches from best available source if stale
+ * - Handles cross-source lookup (e.g., arXiv paper gets refs from ADS)
+ */
+ipcMain.handle('plugin-data:get-refs-smart', async (event, { paperId }) => {
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+
+  try {
+    // Step 1: Check cache
+    const cached = database.getCachedReferences(paperId);
+    if (cached.refs.length > 0 && !cached.isStale) {
+      console.log(`[plugin-data:get-refs-smart] Using cached refs (${database.daysSince(cached.cachedAt)} days old)`);
+      return {
+        success: true,
+        data: {
+          refs: cached.refs,
+          sourcePlugin: cached.sourcePlugin,
+          cachedAt: cached.cachedAt,
+          fromCache: true
+        }
+      };
+    }
+
+    // Step 2: Get paper and its sources
+    const paper = database.getPaper(paperId);
+    if (!paper) {
+      return { success: false, error: 'Paper not found' };
+    }
+
+    const sources = database.getPaperSources(paperId);
+    const bestSource = database.findBestSourceForRefs(sources);
+
+    // Step 3: Try to fetch from best source
+    if (bestSource) {
+      const plugin = pluginManager.get(bestSource.source);
+      if (plugin && typeof plugin.getReferences === 'function') {
+        console.log(`[plugin-data:get-refs-smart] Fetching refs from ${bestSource.source}`);
+        try {
+          const refs = await plugin.getReferences(bestSource.source_id);
+          database.cacheReferences(paperId, refs, bestSource.source);
+          return {
+            success: true,
+            data: {
+              refs,
+              sourcePlugin: bestSource.source,
+              cachedAt: new Date().toISOString(),
+              fromCache: false
+            }
+          };
+        } catch (fetchError) {
+          console.warn(`[plugin-data:get-refs-smart] Failed to fetch from ${bestSource.source}:`, fetchError.message);
+        }
+      }
+    }
+
+    // Step 4: Try cross-source lookup via DOI
+    // Query plugins dynamically by capabilities, sorted by priority
+    if (paper.doi && !bestSource) {
+      const pluginsWithLookup = pluginManager.list()
+        .filter(p => p.capabilities?.lookup && p.capabilities?.references && typeof p.getByDOI === 'function')
+        .sort((a, b) => (a.capabilities?.priority ?? 50) - (b.capabilities?.priority ?? 50));
+
+      for (const plugin of pluginsWithLookup) {
+        try {
+          console.log(`[plugin-data:get-refs-smart] Trying ${plugin.id} via DOI lookup`);
+          const foundPaper = await plugin.getByDOI(paper.doi);
+          if (foundPaper) {
+            const refs = await plugin.getReferences(foundPaper.sourceId || foundPaper.bibcode);
+            database.cacheReferences(paperId, refs, plugin.id);
+            return {
+              success: true,
+              data: {
+                refs,
+                sourcePlugin: plugin.id,
+                cachedAt: new Date().toISOString(),
+                fromCache: false
+              }
+            };
+          }
+        } catch (err) {
+          console.warn(`[plugin-data:get-refs-smart] ${plugin.id} DOI lookup failed:`, err.message);
+        }
+      }
+    }
+
+    // Return cached data even if stale, or empty
+    return {
+      success: true,
+      data: {
+        refs: cached.refs,
+        sourcePlugin: cached.sourcePlugin,
+        cachedAt: cached.cachedAt,
+        fromCache: true,
+        stale: cached.isStale
+      }
+    };
+
+  } catch (error) {
+    console.error('[plugin-data:get-refs-smart] Error:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+/**
+ * Get citations for a library paper with smart caching
+ * Similar to get-refs-smart but for citations
+ */
+ipcMain.handle('plugin-data:get-cites-smart', async (event, { paperId }) => {
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+
+  try {
+    // Step 1: Check cache
+    const cached = database.getCachedCitations(paperId);
+    if (cached.cites.length > 0 && !cached.isStale) {
+      console.log(`[plugin-data:get-cites-smart] Using cached cites (${database.daysSince(cached.cachedAt)} days old)`);
+      return {
+        success: true,
+        data: {
+          cites: cached.cites,
+          sourcePlugin: cached.sourcePlugin,
+          cachedAt: cached.cachedAt,
+          fromCache: true
+        }
+      };
+    }
+
+    // Step 2: Get paper and its sources
+    const paper = database.getPaper(paperId);
+    if (!paper) {
+      return { success: false, error: 'Paper not found' };
+    }
+
+    const sources = database.getPaperSources(paperId);
+    const bestSource = database.findBestSourceForCites(sources);
+
+    // Step 3: Try to fetch from best source
+    if (bestSource) {
+      const plugin = pluginManager.get(bestSource.source);
+      if (plugin && typeof plugin.getCitations === 'function') {
+        console.log(`[plugin-data:get-cites-smart] Fetching cites from ${bestSource.source}`);
+        try {
+          const cites = await plugin.getCitations(bestSource.source_id);
+          database.cacheCitations(paperId, cites, bestSource.source);
+          return {
+            success: true,
+            data: {
+              cites,
+              sourcePlugin: bestSource.source,
+              cachedAt: new Date().toISOString(),
+              fromCache: false
+            }
+          };
+        } catch (fetchError) {
+          console.warn(`[plugin-data:get-cites-smart] Failed to fetch from ${bestSource.source}:`, fetchError.message);
+        }
+      }
+    }
+
+    // Step 4: Try cross-source lookup via DOI
+    // Query plugins dynamically by capabilities, sorted by priority
+    if (paper.doi && !bestSource) {
+      const pluginsWithLookup = pluginManager.list()
+        .filter(p => p.capabilities?.lookup && p.capabilities?.citations && typeof p.getByDOI === 'function')
+        .sort((a, b) => (a.capabilities?.priority ?? 50) - (b.capabilities?.priority ?? 50));
+
+      for (const plugin of pluginsWithLookup) {
+        try {
+          console.log(`[plugin-data:get-cites-smart] Trying ${plugin.id} via DOI lookup`);
+          const foundPaper = await plugin.getByDOI(paper.doi);
+          if (foundPaper) {
+            const cites = await plugin.getCitations(foundPaper.sourceId || foundPaper.bibcode);
+            database.cacheCitations(paperId, cites, plugin.id);
+            return {
+              success: true,
+              data: {
+                cites,
+                sourcePlugin: plugin.id,
+                cachedAt: new Date().toISOString(),
+                fromCache: false
+              }
+            };
+          }
+        } catch (err) {
+          console.warn(`[plugin-data:get-cites-smart] ${plugin.id} DOI lookup failed:`, err.message);
+        }
+      }
+    }
+
+    // Return cached data even if stale, or empty
+    return {
+      success: true,
+      data: {
+        cites: cached.cites,
+        sourcePlugin: cached.sourcePlugin,
+        cachedAt: cached.cachedAt,
+        fromCache: true,
+        stale: cached.isStale
+      }
+    };
+
+  } catch (error) {
+    console.error('[plugin-data:get-cites-smart] Error:', error);
+    return { success: false, error: error.message };
+  }
+});
+
 // =============================================================================
 // End Plugin System IPC Handlers
 // =============================================================================

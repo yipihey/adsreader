@@ -171,7 +171,49 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getCitations: (pluginId, sourceId) => ipcRenderer.invoke('plugin:get-citations', { pluginId, sourceId }),
 
     // Get BibTeX for a paper
-    getBibtex: (pluginId, sourceId) => ipcRenderer.invoke('plugin:get-bibtex', { pluginId, sourceId })
+    getBibtex: (pluginId, sourceId) => ipcRenderer.invoke('plugin:get-bibtex', { pluginId, sourceId }),
+
+    // Get URL to view paper on source website (decoupling: no hardcoded URLs in renderer)
+    getRecordUrl: (pluginId, paper) => ipcRenderer.invoke('plugin:get-record-url', { pluginId, paper }),
+
+    // Get search UI configuration (shortcuts, placeholder, examples)
+    getSearchConfig: (pluginId) => ipcRenderer.invoke('plugin:get-search-config', { pluginId }),
+
+    // Get natural language translation prompt for a plugin
+    getNlPrompt: (pluginId) => ipcRenderer.invoke('plugin:get-nl-prompt', { pluginId }),
+
+    // Get query templates for refs/cites
+    getQueryTemplates: (pluginId) => ipcRenderer.invoke('plugin:get-query-templates', { pluginId })
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PLUGIN DATA ARCHITECTURE (Paper Sources, Cached Refs/Cites)
+  // ═══════════════════════════════════════════════════════════════════════════
+  pluginData: {
+    // Paper source links (multi-source tracking)
+    addSource: (params) => ipcRenderer.invoke('plugin-data:add-source', params),
+    getSources: (paperId) => ipcRenderer.invoke('plugin-data:get-sources', { paperId }),
+
+    // Paper deduplication lookups
+    findByDOI: (doi) => ipcRenderer.invoke('plugin-data:find-by-doi', { doi }),
+    findByArxiv: (arxivId) => ipcRenderer.invoke('plugin-data:find-by-arxiv', { arxivId }),
+
+    // References caching
+    cacheRefs: (paperId, refs, sourcePlugin) =>
+      ipcRenderer.invoke('plugin-data:cache-refs', { paperId, refs, sourcePlugin }),
+    getCachedRefs: (paperId) => ipcRenderer.invoke('plugin-data:get-cached-refs', { paperId }),
+
+    // Citations caching
+    cacheCites: (paperId, cites, sourcePlugin) =>
+      ipcRenderer.invoke('plugin-data:cache-cites', { paperId, cites, sourcePlugin }),
+    getCachedCites: (paperId) => ipcRenderer.invoke('plugin-data:get-cached-cites', { paperId }),
+
+    // Library link updates (for "in library" badges)
+    updateLibraryLinks: (paperId) => ipcRenderer.invoke('plugin-data:update-library-links', { paperId }),
+
+    // Smart refs/cites with caching (preferred for library papers)
+    getRefsSmart: (paperId) => ipcRenderer.invoke('plugin-data:get-refs-smart', { paperId }),
+    getCitesSmart: (paperId) => ipcRenderer.invoke('plugin-data:get-cites-smart', { paperId })
   },
 
   // ═══════════════════════════════════════════════════════════════════════════

@@ -424,7 +424,8 @@ const arxivPlugin = {
     citations: false,   // arXiv doesn't provide citation data
     pdfDownload: true,
     bibtex: true,
-    metadata: true
+    metadata: true,
+    priority: 30  // Lower priority - no refs/cites, use ADS/INSPIRE when available
   },
 
   searchCapabilities: {
@@ -440,9 +441,70 @@ const arxivPlugin = {
     sortOptions: ['date', 'relevance']
   },
 
+  // Search UI configuration
+  searchConfig: {
+    title: 'Search arXiv',
+    placeholder: 'e.g., au:smith ti:galaxy cat:astro-ph.GA',
+    nlPlaceholder: 'e.g., papers by Smith about galaxies...',
+    shortcuts: [
+      { label: 'au:', insert: 'au:' },
+      { label: 'ti:', insert: 'ti:' },
+      { label: 'abs:', insert: 'abs:' },
+      { label: 'cat:', insert: 'cat:' },
+      { label: 'all:', insert: 'all:' }
+    ],
+    exampleSearches: [
+      { label: 'Recent astro-ph', query: 'cat:astro-ph' },
+      { label: 'Galaxy evolution', query: 'ti:galaxy AND abs:evolution' },
+      { label: 'Machine learning papers', query: 'cat:cs.LG' },
+      { label: 'Quantum computing', query: 'all:"quantum computing"' }
+    ]
+  },
+
+  // Query templates (arXiv doesn't support refs/cites)
+  queryTemplates: {
+    references: null,
+    citations: null
+  },
+
+  // Natural language translation prompt
+  nlPrompt: `You translate a user's natural-language request into one arXiv search query string.
+
+arXiv Query Syntax:
+- Author: au:surname
+- Title words: ti:"phrase" or ti:word
+- Abstract: abs:"terms"
+- Category: cat:astro-ph.GA (see arXiv category taxonomy)
+- All fields: all:"phrase"
+- Combine with: AND, OR, ANDNOT
+
+Common categories:
+- astro-ph (Astrophysics), hep-th (High Energy Physics - Theory)
+- gr-qc (General Relativity), cs.LG (Machine Learning)
+- quant-ph (Quantum Physics), math.CO (Combinatorics)
+
+Examples:
+- "papers by Witten on string theory" → au:witten AND ti:"string theory"
+- "galaxy formation in astro-ph" → abs:"galaxy formation" AND cat:astro-ph
+- "quantum computing papers" → all:"quantum computing"
+
+Return ONLY the query string, no explanation.`,
+
   auth: {
     type: 'none',
     description: 'arXiv API is open access, no authentication required'
+  },
+
+  /**
+   * Get URL to view paper on arXiv website
+   * @param {Object} paper - Paper object with arxivId
+   * @returns {string} URL to arXiv abstract page
+   */
+  getRecordUrl(paper) {
+    const arxivId = paper.arxivId || paper.sourceId || paper._arxiv?.fullId;
+    if (!arxivId) return null;
+    const normalized = normalizeArxivId(arxivId);
+    return `https://arxiv.org/abs/${normalized}`;
   },
 
   // ===========================================================================

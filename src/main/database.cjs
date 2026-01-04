@@ -1513,6 +1513,170 @@ function checkBibcodesInLibrary(bibcodes) {
   return results[0].values.map(row => row[0]);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// READING LIST
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Add a paper to the reading list
+ * @param {Object} paper - Paper data from ADS search
+ * @returns {number} The ID of the newly created reading list entry
+ */
+function addToReadingList(paper) {
+  const now = new Date().toISOString();
+
+  db.run(`
+    INSERT OR REPLACE INTO reading_list
+    (bibcode, doi, arxiv_id, title, authors, year, journal, abstract, citation_count, pdf_path, pdf_source, added_date, last_viewed_date)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `, [
+    paper.bibcode,
+    paper.doi || null,
+    paper.arxiv_id || null,
+    paper.title || 'Untitled',
+    typeof paper.authors === 'string' ? paper.authors : JSON.stringify(paper.authors || []),
+    paper.year || null,
+    paper.journal || null,
+    paper.abstract || null,
+    paper.citation_count || 0,
+    paper.pdf_path || null,
+    paper.pdf_source || null,
+    now,
+    now
+  ]);
+
+  const result = db.exec('SELECT last_insert_rowid()');
+  const id = result[0].values[0][0];
+  saveDatabase();
+  return id;
+}
+
+/**
+ * Remove a paper from the reading list
+ * @param {string} bibcode - Paper bibcode
+ */
+function removeFromReadingList(bibcode) {
+  db.run('DELETE FROM reading_list WHERE bibcode = ?', [bibcode]);
+  saveDatabase();
+}
+
+/**
+ * Get all papers in the reading list
+ * @returns {Array} Array of reading list papers
+ */
+function getReadingList() {
+  const results = db.exec(`
+    SELECT * FROM reading_list ORDER BY added_date DESC
+  `);
+  if (results.length === 0) return [];
+
+  const columns = results[0].columns;
+  return results[0].values.map(row => {
+    const obj = {};
+    columns.forEach((col, i) => obj[col] = row[i]);
+    // Parse authors JSON
+    if (obj.authors && typeof obj.authors === 'string') {
+      try {
+        obj.authors = JSON.parse(obj.authors);
+      } catch (e) {
+        obj.authors = [];
+      }
+    }
+    // Add marker for reading list papers
+    obj.isReadingList = true;
+    return obj;
+  });
+}
+
+/**
+ * Get a single paper from the reading list
+ * @param {string} bibcode - Paper bibcode
+ * @returns {Object|null} Reading list paper or null
+ */
+function getReadingListPaper(bibcode) {
+  const stmt = db.prepare('SELECT * FROM reading_list WHERE bibcode = ?');
+  stmt.bind([bibcode]);
+
+  if (stmt.step()) {
+    const obj = stmt.getAsObject();
+    stmt.free();
+    // Parse authors JSON
+    if (obj.authors && typeof obj.authors === 'string') {
+      try {
+        obj.authors = JSON.parse(obj.authors);
+      } catch (e) {
+        obj.authors = [];
+      }
+    }
+    obj.isReadingList = true;
+    return obj;
+  }
+  stmt.free();
+  return null;
+}
+
+/**
+ * Check if a paper is in the reading list
+ * @param {string} bibcode - Paper bibcode
+ * @returns {boolean}
+ */
+function isInReadingList(bibcode) {
+  const results = db.exec('SELECT 1 FROM reading_list WHERE bibcode = ?', [bibcode]);
+  return results.length > 0 && results[0].values.length > 0;
+}
+
+/**
+ * Update reading list paper (PDF path, view position, etc.)
+ * @param {string} bibcode - Paper bibcode
+ * @param {Object} updates - Fields to update
+ */
+function updateReadingListPaper(bibcode, updates) {
+  const fields = [];
+  const values = [];
+
+  const allowedFields = ['pdf_path', 'pdf_source', 'last_viewed_date', 'view_position'];
+
+  for (const [key, value] of Object.entries(updates)) {
+    if (allowedFields.includes(key)) {
+      fields.push(`${key} = ?`);
+      values.push(value);
+    }
+  }
+
+  if (fields.length === 0) return;
+
+  values.push(bibcode);
+  db.run(`UPDATE reading_list SET ${fields.join(', ')} WHERE bibcode = ?`, values);
+  saveDatabase();
+}
+
+/**
+ * Get reading list count
+ * @returns {number}
+ */
+function getReadingListCount() {
+  const results = db.exec('SELECT COUNT(*) FROM reading_list');
+  return results[0]?.values[0][0] || 0;
+}
+
+/**
+ * Check which bibcodes are in the reading list
+ * @param {string[]} bibcodes - Array of bibcodes to check
+ * @returns {string[]} Array of bibcodes in reading list
+ */
+function checkBibcodesInReadingList(bibcodes) {
+  if (!bibcodes || bibcodes.length === 0) return [];
+
+  const placeholders = bibcodes.map(() => '?').join(',');
+  const results = db.exec(
+    `SELECT bibcode FROM reading_list WHERE bibcode IN (${placeholders})`,
+    bibcodes
+  );
+
+  if (results.length === 0) return [];
+  return results[0].values.map(row => row[0]);
+}
+
 module.exports = {
   initDatabase,
   closeDatabase,
@@ -1582,5 +1746,14 @@ module.exports = {
   addSmartSearchResult,
   getSmartSearchResultsWithLibraryStatus,
   reorderSmartSearches,
-  checkBibcodesInLibrary
+  checkBibcodesInLibrary,
+  // Reading List
+  addToReadingList,
+  removeFromReadingList,
+  getReadingList,
+  getReadingListPaper,
+  isInReadingList,
+  updateReadingListPaper,
+  getReadingListCount,
+  checkBibcodesInReadingList
 };

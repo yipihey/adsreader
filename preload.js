@@ -324,6 +324,32 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.removeAllListeners('temp-pdf-progress'),
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // READING LIST
+  // ═══════════════════════════════════════════════════════════════════════════
+  readingListHas: (bibcode) =>
+    ipcRenderer.invoke('reading-list-has', { bibcode }),
+  readingListGetAll: () =>
+    ipcRenderer.invoke('reading-list-get-all'),
+  readingListCount: () =>
+    ipcRenderer.invoke('reading-list-count'),
+  readingListGet: (bibcode) =>
+    ipcRenderer.invoke('reading-list-get', { bibcode }),
+  readingListAdd: (paper, downloadPdf = true) =>
+    ipcRenderer.invoke('reading-list-add', { paper, downloadPdf }),
+  readingListAddBatch: (papers, downloadPdf = true) =>
+    ipcRenderer.invoke('reading-list-add-batch', { papers, downloadPdf }),
+  readingListRemove: (bibcode) =>
+    ipcRenderer.invoke('reading-list-remove', { bibcode }),
+  readingListGetPdfPath: (bibcode) =>
+    ipcRenderer.invoke('reading-list-get-pdf-path', { bibcode }),
+  readingListUpdate: (bibcode, updates) =>
+    ipcRenderer.invoke('reading-list-update', { bibcode, updates }),
+  readingListPromote: (bibcode) =>
+    ipcRenderer.invoke('reading-list-promote', { bibcode }),
+  readingListCheckBibcodes: (bibcodes) =>
+    ipcRenderer.invoke('reading-list-check-bibcodes', { bibcodes }),
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // UTILITIES
   // ═══════════════════════════════════════════════════════════════════════════
   openExternal: (url) => ipcRenderer.invoke('open-external', url),

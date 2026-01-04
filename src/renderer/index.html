@@ -20,6 +20,21 @@
   <!-- Top Bar -->
   <div class="mobile-top-bar" id="mobile-top-bar">
     <div class="mobile-toolbar-btns">
+      <div class="mobile-view-dropdown">
+        <button class="mobile-tb-btn mobile-view-btn" id="mobile-view-btn" title="Switch view">
+          <span class="mobile-view-label">All Papers</span>
+          <span class="mobile-view-arrow">▾</span>
+        </button>
+        <div class="mobile-view-menu hidden" id="mobile-view-menu">
+          <div class="mobile-view-section-header">Library</div>
+          <div class="mobile-view-option" data-view="all">📄 All Papers</div>
+          <div class="mobile-view-option" data-view="unread">📖 Unread</div>
+          <div class="mobile-view-option" data-view="reading">📕 Reading</div>
+          <div class="mobile-view-option" data-view="read">✓ Read</div>
+          <div class="mobile-view-divider"></div>
+          <div class="mobile-view-option" data-view="reading-list">🔖 Reading List</div>
+        </div>
+      </div>
       <div class="mobile-sort-dropdown">
         <button class="mobile-tb-btn mobile-sort-btn" id="mobile-sort-btn" title="Sort papers">
           <span class="mobile-sort-label">Date</span>
@@ -166,6 +181,15 @@
           <span class="nav-icon">✓</span>
           <span>Read</span>
           <span class="nav-count" id="read-count">0</span>
+        </div>
+      </div>
+
+      <div class="sidebar-section reading-list-section">
+        <div class="section-header">Reading List</div>
+        <div class="nav-item" data-view="reading-list">
+          <span class="nav-icon">🔖</span>
+          <span>Saved for Later</span>
+          <span class="nav-count" id="reading-list-count">0</span>
         </div>
       </div>
 

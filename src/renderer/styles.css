@@ -7223,6 +7223,75 @@ body.viewing-pdf .mobile-top-bar {
   border-radius: 0 0 4px 4px;
 }
 
+/* View Dropdown (Library/Reading List switcher) */
+.mobile-view-dropdown {
+  position: relative;
+}
+
+.mobile-view-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.mobile-view-label {
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.mobile-view-arrow {
+  font-size: 8px;
+  opacity: 0.7;
+}
+
+.mobile-view-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  z-index: 300;
+  min-width: 150px;
+  padding: 4px 0;
+}
+
+.mobile-view-menu.hidden {
+  display: none;
+}
+
+.mobile-view-section-header {
+  padding: 6px 12px 4px;
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.mobile-view-option {
+  padding: 8px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.mobile-view-option:hover {
+  background: var(--bg-hover);
+}
+
+.mobile-view-option.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.mobile-view-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
 .mobile-download-dropdown {
   position: relative;
 }
@@ -8913,6 +8982,39 @@ body.selection-mode .paper-swipe-container .paper-item {
   font-weight: 500;
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+/* Reading List Badge */
+.reading-list-badge {
+  font-size: 11px;
+  margin-left: 6px;
+}
+
+/* Bookmark Button for Reading List */
+.paper-action-btn.bookmark-btn {
+  font-size: 12px;
+  transition: transform 0.15s ease;
+}
+
+.paper-action-btn.bookmark-btn:hover {
+  transform: scale(1.2);
+}
+
+.paper-action-btn.bookmark-btn.active {
+  color: var(--warning);
+}
+
+/* Reading List Section */
+.reading-list-section .nav-item[data-view="reading-list"] {
+  border-left: 2px solid transparent;
+}
+
+.reading-list-section .nav-item[data-view="reading-list"].active {
+  border-left-color: var(--warning);
+}
+
+.reading-list-section .nav-item[data-view="reading-list"]:hover:not(.active) {
+  border-left-color: var(--border);
 }
 
 /* Paper item styling for ADS search results */

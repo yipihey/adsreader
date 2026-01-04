@@ -156,6 +156,24 @@ CREATE TABLE IF NOT EXISTS smart_search_results (
   FOREIGN KEY (search_id) REFERENCES smart_searches(id) ON DELETE CASCADE,
   UNIQUE(search_id, bibcode)
 );
+
+CREATE TABLE IF NOT EXISTS reading_list (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  bibcode TEXT UNIQUE NOT NULL,
+  doi TEXT,
+  arxiv_id TEXT,
+  title TEXT NOT NULL,
+  authors TEXT,
+  year INTEGER,
+  journal TEXT,
+  abstract TEXT,
+  citation_count INTEGER DEFAULT 0,
+  pdf_path TEXT,
+  pdf_source TEXT,
+  added_date TEXT NOT NULL,
+  last_viewed_date TEXT,
+  view_position TEXT
+);
 `;
 
 /**
@@ -177,7 +195,9 @@ const INDEXES_SQL = [
   'CREATE INDEX IF NOT EXISTS idx_paper_files_status ON paper_files(status)',
   'CREATE INDEX IF NOT EXISTS idx_pdf_rotations_paper ON pdf_page_rotations(paper_id)',
   'CREATE INDEX IF NOT EXISTS idx_smart_search_results_search ON smart_search_results(search_id)',
-  'CREATE INDEX IF NOT EXISTS idx_smart_search_results_bibcode ON smart_search_results(bibcode)'
+  'CREATE INDEX IF NOT EXISTS idx_smart_search_results_bibcode ON smart_search_results(bibcode)',
+  'CREATE INDEX IF NOT EXISTS idx_reading_list_bibcode ON reading_list(bibcode)',
+  'CREATE INDEX IF NOT EXISTS idx_reading_list_added ON reading_list(added_date)'
 ];
 
 /**

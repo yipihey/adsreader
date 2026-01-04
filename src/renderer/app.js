@@ -273,6 +273,11 @@ class ADSReader {
       e.stopPropagation();
       this.toggleMobileSortMenu();
     });
+    document.getElementById('mobile-view-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.toggleMobileViewMenu();
+    });
+    this.setupMobileViewMenu();
 
     // Mobile download dropdown - dynamically populated from ADS sources
     document.getElementById('mobile-download-btn')?.addEventListener('click', async (e) => {
@@ -448,6 +453,71 @@ class ADSReader {
     if (menu) {
       menu.classList.add('hidden');
     }
+  }
+
+  toggleMobileViewMenu() {
+    const menu = document.getElementById('mobile-view-menu');
+    if (menu) {
+      menu.classList.toggle('hidden');
+      // Close sort menu if open
+      this.closeMobileSortMenu();
+    }
+  }
+
+  closeMobileViewMenu() {
+    const menu = document.getElementById('mobile-view-menu');
+    if (menu) {
+      menu.classList.add('hidden');
+    }
+  }
+
+  setupMobileViewMenu() {
+    const menu = document.getElementById('mobile-view-menu');
+    const options = document.querySelectorAll('.mobile-view-option');
+
+    if (!menu) return;
+
+    options.forEach(opt => {
+      opt.addEventListener('click', () => {
+        const view = opt.dataset.view;
+        this.setView(view);
+        this.updateMobileViewButton();
+        this.closeMobileViewMenu();
+      });
+    });
+
+    // Close menu when clicking outside
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.mobile-view-dropdown')) {
+        this.closeMobileViewMenu();
+      }
+    });
+
+    // Mark current view as active
+    this.updateMobileViewButton();
+  }
+
+  updateMobileViewButton() {
+    const label = document.querySelector('.mobile-view-label');
+    const options = document.querySelectorAll('.mobile-view-option');
+
+    if (!label) return;
+
+    const viewLabels = {
+      'all': 'All Papers',
+      'unread': 'Unread',
+      'reading': 'Reading',
+      'read': 'Read',
+      'reading-list': 'Reading List'
+    };
+
+    const currentView = this.currentView || 'all';
+    label.textContent = viewLabels[currentView] || 'All Papers';
+
+    // Update active state
+    options.forEach(opt => {
+      opt.classList.toggle('active', opt.dataset.view === currentView);
+    });
   }
 
   // Shared sort option handler - used by both mobile and desktop dropdowns
@@ -1466,14 +1536,143 @@ class ADSReader {
     return div.innerHTML;
   }
 
-  // Sanitize abstract text - allow safe HTML tags (sub, sup) and decode entities
+  // Render LaTeX math using KaTeX
+  renderMath(latex, displayMode = false) {
+    if (!latex || typeof katex === 'undefined') return latex;
+
+    try {
+      // Clean up the LaTeX string
+      let cleaned = latex.trim();
+
+      // Remove wrapping $ or $$ delimiters if present
+      if (displayMode && cleaned.startsWith('$$') && cleaned.endsWith('$$')) {
+        cleaned = cleaned.slice(2, -2);
+      } else if (cleaned.startsWith('$') && cleaned.endsWith('$')) {
+        cleaned = cleaned.slice(1, -1);
+      }
+
+      return katex.renderToString(cleaned, {
+        throwOnError: false,
+        displayMode: displayMode,
+        output: 'html'
+      });
+    } catch (e) {
+      console.warn('KaTeX render error:', e.message);
+      return this.escapeHtml(latex);
+    }
+  }
+
+  // Sanitize abstract text - allow safe HTML tags and render LaTeX math
   sanitizeAbstract(str) {
     if (!str) return '';
 
-    // First, escape everything for safety
-    let safe = this.escapeHtml(str);
+    // Step 0: Decode HTML entities first (before math extraction)
+    // Use a textarea trick to decode entities safely
+    const decodeEntities = (text) => {
+      const textarea = document.createElement('textarea');
+      textarea.innerHTML = text;
+      return textarea.value;
+    };
+    let processed = decodeEntities(str);
 
-    // Now selectively restore safe tags (case-insensitive)
+    // Step 0b: Convert paragraph and line break tags to placeholders
+    // Handle <P />, <P/>, <p>, </p>, <br>, <br/>, <br />
+    processed = processed.replace(/<P\s*\/?>/gi, '\x00PARA\x00');
+    processed = processed.replace(/<\/P>/gi, '\x00PARA\x00');
+    processed = processed.replace(/<BR\s*\/?>/gi, '\x00BR\x00');
+
+    // Create placeholder map for math expressions to protect them during HTML processing
+    const mathPlaceholders = [];
+
+    // Step 1: Extract and process ADS-style inline formulas
+    // Format: <inline-formula><tex-math>$...$</tex-math></inline-formula>
+    processed = processed.replace(
+      /<inline-formula>\s*<tex-math>([\s\S]*?)<\/tex-math>\s*<\/inline-formula>/gi,
+      (match, latex) => {
+        const rendered = this.renderMath(latex, false);
+        const placeholder = `\x00MATH${mathPlaceholders.length}\x00`;
+        mathPlaceholders.push(rendered);
+        return placeholder;
+      }
+    );
+
+    // Step 2: Extract display-formula tags (ADS sometimes uses these)
+    processed = processed.replace(
+      /<display-formula>\s*<tex-math>([\s\S]*?)<\/tex-math>\s*<\/display-formula>/gi,
+      (match, latex) => {
+        const rendered = this.renderMath(latex, true);
+        const placeholder = `\x00MATH${mathPlaceholders.length}\x00`;
+        mathPlaceholders.push(rendered);
+        return placeholder;
+      }
+    );
+
+    // Step 3: Extract standalone <tex-math> tags
+    processed = processed.replace(
+      /<tex-math>([\s\S]*?)<\/tex-math>/gi,
+      (match, latex) => {
+        const rendered = this.renderMath(latex, false);
+        const placeholder = `\x00MATH${mathPlaceholders.length}\x00`;
+        mathPlaceholders.push(rendered);
+        return placeholder;
+      }
+    );
+
+    // Step 4: Extract display math $$...$$ (must be done before inline $...$)
+    processed = processed.replace(
+      /\$\$([^$]+)\$\$/g,
+      (match, latex) => {
+        const rendered = this.renderMath(latex, true);
+        const placeholder = `\x00MATH${mathPlaceholders.length}\x00`;
+        mathPlaceholders.push(rendered);
+        return placeholder;
+      }
+    );
+
+    // Step 5: Extract inline math $...$
+    // Be careful not to match currency or other uses of single $
+    // Match $ followed by non-space, content, non-space, $
+    processed = processed.replace(
+      /\$([^\s$][^$]*[^\s$])\$/g,
+      (match, latex) => {
+        // Skip if it looks like currency (just numbers)
+        if (/^\d+([.,]\d+)?$/.test(latex.trim())) {
+          return match;
+        }
+        const rendered = this.renderMath(latex, false);
+        const placeholder = `\x00MATH${mathPlaceholders.length}\x00`;
+        mathPlaceholders.push(rendered);
+        return placeholder;
+      }
+    );
+
+    // Step 6: Handle single-character inline math $X$ (including Greek and other Unicode letters)
+    processed = processed.replace(
+      /\$([A-Za-z\u0370-\u03FF\u1F00-\u1FFF\\])\$/g,
+      (match, latex) => {
+        const rendered = this.renderMath(latex, false);
+        const placeholder = `\x00MATH${mathPlaceholders.length}\x00`;
+        mathPlaceholders.push(rendered);
+        return placeholder;
+      }
+    );
+
+    // Step 6b: Handle two-character inline math like $Λ$CDM edge cases
+    // Match $X$ where X is any non-$ non-space character
+    processed = processed.replace(
+      /\$([^\s$])\$/g,
+      (match, latex) => {
+        const rendered = this.renderMath(latex, false);
+        const placeholder = `\x00MATH${mathPlaceholders.length}\x00`;
+        mathPlaceholders.push(rendered);
+        return placeholder;
+      }
+    );
+
+    // Step 7: Now escape everything for safety
+    let safe = this.escapeHtml(processed);
+
+    // Step 8: Selectively restore safe tags (case-insensitive)
     // Restore <sub> and </sub>
     safe = safe.replace(/&lt;sub&gt;/gi, '<sub>');
     safe = safe.replace(/&lt;\/sub&gt;/gi, '</sub>');
@@ -1493,6 +1692,15 @@ class ADSReader {
     // Restore <b> and </b> for bold
     safe = safe.replace(/&lt;b&gt;/gi, '<b>');
     safe = safe.replace(/&lt;\/b&gt;/gi, '</b>');
+
+    // Step 9: Restore math placeholders with rendered HTML
+    for (let i = 0; i < mathPlaceholders.length; i++) {
+      safe = safe.replace(`\x00MATH${i}\x00`, mathPlaceholders[i]);
+    }
+
+    // Step 10: Restore paragraph and line break placeholders
+    safe = safe.replace(/\x00PARA\x00/g, '<br><br>');
+    safe = safe.replace(/\x00BR\x00/g, '<br>');
 
     return safe;
   }
@@ -3685,6 +3893,9 @@ class ADSReader {
           // Cmd+A: Select all papers
           e.preventDefault();
           this.selectAllPapers();
+        } else if (this.currentView === 'reading-list' && this.selectedPapers.size > 0) {
+          // 'a' promotes reading list papers to library
+          this.promoteSelectedReadingListPapers();
         } else if ((this.currentSmartSearch || this.isAdsSearchActive) && this.selectedPapers.size > 0) {
           // 'a' adds selected papers to library (from smart search, ADS search, or refs/cites)
           this.addSelectedPapersToLibrary();
@@ -3736,6 +3947,12 @@ class ADSReader {
       case 's':
         if (this.selectedPapers.size > 0) {
           this.syncSelectedPapers();
+        }
+        break;
+      case 'b':
+        // 'b' adds selected papers to reading list (from ADS search)
+        if ((this.currentSmartSearch || this.isAdsSearchActive) && this.selectedPapers.size > 0) {
+          this.addSelectedPapersToReadingList();
         }
         break;
       case 'p':
@@ -4279,6 +4496,9 @@ class ADSReader {
     if (readingCount) readingCount.textContent = info.readingCount || 0;
     if (readCount) readCount.textContent = info.readCount || 0;
 
+    // Update reading list count
+    this.updateReadingListCount();
+
     if (pathDisplay && info.path) {
       const folderName = info.path.split('/').pop();
       pathDisplay.textContent = folderName;
@@ -4289,6 +4509,19 @@ class ADSReader {
   async loadPapers() {
     // Ad-hoc ADS search - papers already set by executeAdsPaneSearch
     if (this.isAdsSearchActive) {
+      this.sortPapers();
+      this.renderPaperList();
+      return;
+    }
+
+    // Reading list view - load from reading list
+    if (this.currentView === 'reading-list') {
+      this.papers = await window.electronAPI.readingListGetAll();
+      // Mark papers as reading list papers
+      this.papers.forEach(p => {
+        p.id = p.bibcode; // Use bibcode as ID for reading list papers
+        p.isReadingList = true; // Explicitly set flag for displayPaper logic
+      });
       this.sortPapers();
       this.renderPaperList();
       return;
@@ -4309,6 +4542,14 @@ class ADSReader {
     this.collections = await window.electronAPI.getCollections();
     this.renderCollections();
     this.renderFilterCollections();
+  }
+
+  async updateReadingListCount() {
+    const count = await window.electronAPI.readingListCount();
+    const countEl = document.getElementById('reading-list-count');
+    if (countEl) {
+      countEl.textContent = count || 0;
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -4578,16 +4819,18 @@ class ADSReader {
       const added = result.results.imported.length;
       const skipped = result.results.skipped.length;
 
-      // Mark papers as in library
+      // Mark papers as in library (and no longer in reading list)
       for (const imported of result.results.imported) {
         const paper = this.papers.find(p => p.bibcode === imported.paper?.bibcode);
         if (paper) {
           paper.inLibrary = true;
           paper.libraryPaperId = imported.id;
+          paper.inReadingList = false; // Removed from reading list by backend
         }
       }
 
       this.renderPaperList();
+      await this.updateReadingListCount(); // Update count (papers removed from reading list)
       let msg = added === 1 ? 'Added 1 paper to library' : `Added ${added} papers to library`;
       if (skipped > 0) {
         msg += ` (${skipped} already in library)`;
@@ -4595,6 +4838,108 @@ class ADSReader {
       this.showNotification(msg, 'success');
     } else {
       this.showNotification(`Import failed: ${result.error}`, 'error');
+    }
+  }
+
+  /**
+   * Add selected papers from ADS search to reading list
+   * Uses batch API for parallel processing (~10x faster)
+   * Triggered by 'b' shortcut
+   */
+  async addSelectedPapersToReadingList() {
+    if (!this.currentSmartSearch && !this.isAdsSearchActive) return;
+
+    const papersToAdd = [];
+    for (const id of this.selectedPapers) {
+      const paper = this.papers.find(p => p.id === id);
+      if (paper && !paper.inLibrary && !paper.inReadingList) {
+        papersToAdd.push(paper);
+      }
+    }
+
+    if (papersToAdd.length === 0) {
+      this.showNotification('All selected papers already saved', 'info');
+      return;
+    }
+
+    this.showNotification(`Saving ${papersToAdd.length} paper(s) to reading list...`, 'info');
+
+    try {
+      const result = await window.electronAPI.readingListAddBatch(papersToAdd, true);
+
+      const added = result.results.added.length;
+      const skipped = result.results.skipped.length;
+      const failed = result.results.failed.length;
+
+      // Mark papers as in reading list
+      for (const r of result.results.added) {
+        const paper = this.papers.find(p => p.bibcode === r.bibcode);
+        if (paper) paper.inReadingList = true;
+      }
+
+      // Update bookmark icons
+      this.renderPaperList();
+      await this.updateReadingListCount();
+
+      let msg = added === 1 ? 'Saved 1 paper' : `Saved ${added} papers`;
+      if (skipped > 0) msg += ` (${skipped} skipped)`;
+      if (failed > 0) msg += ` (${failed} failed)`;
+      this.showNotification(msg + ' to reading list', added > 0 ? 'success' : 'info');
+    } catch (err) {
+      console.error('Batch add to reading list failed:', err);
+      this.showNotification('Failed to add papers to reading list', 'error');
+    }
+  }
+
+  /**
+   * Promote selected reading list papers to library
+   * Used by 'a' shortcut and context menu
+   */
+  async promoteSelectedReadingListPapers() {
+    if (this.currentView !== 'reading-list') return;
+
+    const bibcodesToPromote = [];
+    for (const id of this.selectedPapers) {
+      // In reading list, id is the bibcode
+      if (typeof id === 'string') {
+        bibcodesToPromote.push(id);
+      }
+    }
+
+    if (bibcodesToPromote.length === 0) {
+      this.showNotification('No papers selected', 'info');
+      return;
+    }
+
+    this.showNotification(`Adding ${bibcodesToPromote.length} paper(s) to library...`, 'info');
+
+    let success = 0;
+    let failed = 0;
+
+    for (const bibcode of bibcodesToPromote) {
+      try {
+        const result = await window.electronAPI.readingListPromote(bibcode);
+        if (result.success) {
+          success++;
+        } else {
+          console.error(`Failed to promote ${bibcode}:`, result.error);
+          failed++;
+        }
+      } catch (err) {
+        console.error(`Error promoting ${bibcode}:`, err);
+        failed++;
+      }
+    }
+
+    // Refresh the reading list view
+    await this.loadPapers();
+    await this.updateReadingListCount();
+
+    if (failed === 0) {
+      const msg = success === 1 ? 'Added 1 paper to library' : `Added ${success} papers to library`;
+      this.showNotification(msg, 'success');
+    } else {
+      this.showNotification(`Added ${success}, failed ${failed}`, 'warning');
     }
   }
 
@@ -4663,10 +5008,14 @@ class ADSReader {
       // ADS search paper specific badges
       const inLibraryBadge = (isAdsSearchView && paper.inLibrary) ?
         '<span class="in-library-badge" title="Already in your library">In Library</span>' : '';
+      const inReadingListBadge = paper.isReadingList ?
+        '<span class="reading-list-badge" title="In reading list">🔖</span>' : '';
 
       // Action buttons for ADS search results (not in library)
+      const bookmarkBtn = (isAdsSearchView && !paper.inLibrary) ?
+        `<span class="paper-action-btn bookmark-btn${paper.inReadingList ? ' active' : ''}" title="${paper.inReadingList ? 'Remove from reading list' : 'Save to reading list (s)'}">${paper.inReadingList ? '🔖' : '☆'}</span>` : '';
       const actionButtons = (isAdsSearchView && !paper.inLibrary) ?
-        '<span class="paper-action-btns"><span class="paper-action-btn add-btn" title="Add to library (a)">+</span><span class="paper-action-btn link-btn" title="Open in ADS (w)">↗</span></span>' : '';
+        `<span class="paper-action-btns">${bookmarkBtn}<span class="paper-action-btn add-btn" title="Add to library (a)">+</span><span class="paper-action-btn link-btn" title="Open in ADS (w)">↗</span></span>` : '';
 
       // For ADS papers, hide the swipe action if already in library
       // Only render swipe action on iOS - it's not needed on macOS
@@ -4776,10 +5125,14 @@ class ADSReader {
       // ADS search paper specific badges
       const inLibraryBadge = (isAdsSearchView && paper.inLibrary) ?
         '<span class="in-library-badge" title="Already in your library">In Library</span>' : '';
+      const inReadingListBadge = paper.isReadingList ?
+        '<span class="reading-list-badge" title="In reading list">🔖</span>' : '';
 
       // Action buttons for ADS search results (not in library)
+      const bookmarkBtn = (isAdsSearchView && !paper.inLibrary) ?
+        `<span class="paper-action-btn bookmark-btn${paper.inReadingList ? ' active' : ''}" title="${paper.inReadingList ? 'Remove from reading list' : 'Save to reading list (s)'}">${paper.inReadingList ? '🔖' : '☆'}</span>` : '';
       const actionButtons = (isAdsSearchView && !paper.inLibrary) ?
-        '<span class="paper-action-btns"><span class="paper-action-btn add-btn" title="Add to library (a)">+</span><span class="paper-action-btn link-btn" title="Open in ADS (w)">↗</span></span>' : '';
+        `<span class="paper-action-btns">${bookmarkBtn}<span class="paper-action-btn add-btn" title="Add to library (a)">+</span><span class="paper-action-btn link-btn" title="Open in ADS (w)">↗</span></span>` : '';
 
       // For ADS papers, hide the swipe action if already in library
       // Only render swipe action on iOS - it's not needed on macOS
@@ -4821,9 +5174,10 @@ class ADSReader {
     // Add click handlers with multi-select support
     container.querySelectorAll('.paper-item').forEach(item => {
       item.addEventListener('click', (e) => {
-        // For ADS search papers, ID is a bibcode string; for local papers, it's a number
+        // For ADS search papers and reading list, ID is a bibcode string; for local papers, it's a number
         const rawId = item.dataset.id;
-        const id = (this.currentSmartSearch || this.isAdsSearchActive) ? rawId : parseInt(rawId);
+        const useStringId = this.currentSmartSearch || this.isAdsSearchActive || this.currentView === 'reading-list';
+        const id = useStringId ? rawId : parseInt(rawId);
         const index = parseInt(item.dataset.index);
         this.handlePaperClick(id, index, e);
       });
@@ -4831,7 +5185,8 @@ class ADSReader {
       // Drag support
       item.addEventListener('dragstart', (e) => {
         const rawId = item.dataset.id;
-        const id = (this.currentSmartSearch || this.isAdsSearchActive) ? rawId : parseInt(rawId);
+        const useStringId = this.currentSmartSearch || this.isAdsSearchActive || this.currentView === 'reading-list';
+        const id = useStringId ? rawId : parseInt(rawId);
         if (!this.selectedPapers.has(id)) {
           this.selectedPapers.clear();
           this.selectedPapers.add(id);
@@ -4902,6 +5257,40 @@ class ADSReader {
         e.stopPropagation();
         const bibcode = btn.closest('.paper-swipe-container').dataset.bibcode;
         if (bibcode) window.electronAPI.openExternal(`https://ui.adsabs.harvard.edu/abs/${bibcode}`);
+      });
+    });
+
+    // Bookmark button handlers for reading list
+    container.querySelectorAll('.paper-action-btn.bookmark-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const bibcode = btn.closest('.paper-swipe-container').dataset.bibcode;
+        if (!bibcode) return;
+
+        const paper = this.papers.find(p => p.bibcode === bibcode);
+        if (!paper) return;
+
+        if (paper.inReadingList) {
+          // Remove from reading list
+          const result = await window.electronAPI.readingListRemove(bibcode);
+          if (result.success) {
+            paper.inReadingList = false;
+            this.renderPaperList();
+            this.updateReadingListCount();
+            this.showNotification('Removed from reading list', 'info');
+          }
+        } else {
+          // Add to reading list
+          const result = await window.electronAPI.readingListAdd(paper);
+          if (result.success) {
+            paper.inReadingList = true;
+            this.renderPaperList();
+            this.updateReadingListCount();
+            this.showNotification('Saved to reading list', 'success');
+          } else {
+            this.showNotification(result.error || 'Failed to save', 'error');
+          }
+        }
       });
     });
 
@@ -5106,9 +5495,10 @@ class ADSReader {
 
   updatePaperListSelection() {
     document.querySelectorAll('.paper-item').forEach(item => {
-      // For ADS search papers, ID is a bibcode string; for local papers, it's a number
+      // For ADS search papers and reading list, ID is a bibcode string; for local papers, it's a number
       const rawId = item.dataset.id;
-      const id = (this.currentSmartSearch || this.isAdsSearchActive) ? rawId : parseInt(rawId);
+      const useStringId = this.currentSmartSearch || this.isAdsSearchActive || this.currentView === 'reading-list';
+      const id = useStringId ? rawId : parseInt(rawId);
       item.classList.toggle('selected', this.selectedPapers.has(id));
     });
   }
@@ -5480,9 +5870,10 @@ class ADSReader {
 
     e.preventDefault();
 
-    // For smart search/ADS search, ID is bibcode (string); for library, it's numeric
+    // For smart search/ADS search/reading list, ID is bibcode (string); for library, it's numeric
     const rawId = paperItem.dataset.id;
-    const id = (this.currentSmartSearch || this.isAdsSearchActive) ? rawId : parseInt(rawId);
+    const useStringId = this.currentSmartSearch || this.isAdsSearchActive || this.currentView === 'reading-list';
+    const id = useStringId ? rawId : parseInt(rawId);
 
     // If right-clicked paper is not in selection, select only it
     if (!this.selectedPapers.has(id)) {
@@ -6110,8 +6501,69 @@ class ADSReader {
     const currentTab = document.querySelector('.tab-btn.active')?.dataset.tab;
     const infoTabs = ['abstract', 'refs', 'cites', 'bibtex'];
 
+    console.log('[displayPaper] Paper type check:', {
+      id: resolvedPaper.id,
+      bibcode: resolvedPaper.bibcode,
+      isReadingList: resolvedPaper.isReadingList,
+      isAdsSearch: resolvedPaper.isAdsSearch,
+      currentView: this.currentView
+    });
+
+    // For reading list papers, handle persistent PDF
+    if (resolvedPaper.isReadingList) {
+      // Get PDF path from reading list cache
+      const pdfPath = await window.electronAPI.readingListGetPdfPath(resolvedPaper.bibcode);
+
+      if (pdfPath) {
+        resolvedPaper._pdfFilePath = pdfPath;
+        resolvedPaper._pdfSourceType = resolvedPaper.pdf_source || 'READING_LIST';
+        this.currentPdfSource = resolvedPaper._pdfSourceType;
+
+        if (currentTab === 'pdf' || !infoTabs.includes(currentTab)) {
+          await this.loadPDF(resolvedPaper);
+          if (!infoTabs.includes(currentTab)) {
+            this.switchTab('pdf');
+          }
+        }
+      } else {
+        // No PDF available - add download button to abstract
+        const abstractEl = document.getElementById('abstract-content');
+        const pdfBtnHtml = `
+          <div class="abstract-pdf-action">
+            <button class="primary-button abstract-view-pdf-btn" id="reading-list-download-pdf-btn">
+              Download & View PDF
+            </button>
+            <button class="secondary-button" id="reading-list-promote-btn" style="margin-left: 8px;">
+              Add to Library
+            </button>
+          </div>
+        `;
+        abstractEl.insertAdjacentHTML('beforeend', pdfBtnHtml);
+
+        // Add click handlers
+        document.getElementById('reading-list-download-pdf-btn')?.addEventListener('click', async () => {
+          await this.downloadAndViewTempPDF(resolvedPaper);
+        });
+        document.getElementById('reading-list-promote-btn')?.addEventListener('click', async () => {
+          const result = await window.electronAPI.readingListPromote(resolvedPaper.bibcode);
+          if (result.success) {
+            this.showNotification(`Added "${result.title}" to library`, 'success');
+            this.updateReadingListCount();
+            this.setView('all'); // Switch to library view
+          } else {
+            this.showNotification(result.error || 'Failed to add to library', 'error');
+          }
+        });
+
+        if (!infoTabs.includes(currentTab)) {
+          this.switchTab('abstract');
+        }
+      }
+      return;
+    }
+
     // For ADS search papers, handle temp PDF viewing
-    if (this.currentSmartSearch) {
+    if (this.currentSmartSearch || this.isAdsSearchActive) {
       // Check if temp PDF is already cached
       const hasTempPdf = await window.electronAPI.tempPdfHas(resolvedPaper.bibcode);
 
@@ -7229,6 +7681,7 @@ class ADSReader {
     });
 
     this.updateFilterLabel();
+    this.updateMobileViewButton();
     this.loadPapers();
   }
 
@@ -7365,14 +7818,18 @@ class ADSReader {
     const count = this.selectedPapers.size;
     if (count === 0) return;
 
+    // Check if we're in reading list mode
+    const isReadingList = this.currentView === 'reading-list';
+    const locationName = isReadingList ? 'reading list' : 'library';
+
     // Build confirmation message
     let message;
     if (count === 1) {
       const paper = this.papers.find(p => this.selectedPapers.has(p.id));
       const title = paper?.title || 'Untitled';
-      message = `Remove "${title}" from library?\n\nThis will delete the paper entry and its PDF file.`;
+      message = `Remove "${title}" from ${locationName}?\n\nThis will delete the paper entry and its PDF file.`;
     } else {
-      message = `Remove ${count} papers from library?\n\nThis will delete all paper entries and their PDF files.`;
+      message = `Remove ${count} papers from ${locationName}?\n\nThis will delete all paper entries and their PDF files.`;
     }
 
     if (!confirm(message)) {
@@ -7380,9 +7837,17 @@ class ADSReader {
     }
 
     try {
-      // Use bulk delete for efficiency
-      const ids = Array.from(this.selectedPapers);
-      await window.electronAPI.deletePapersBulk(ids);
+      if (isReadingList) {
+        // Delete from reading list - use bibcode (which is used as id for reading list papers)
+        const bibcodes = Array.from(this.selectedPapers);
+        for (const bibcode of bibcodes) {
+          await window.electronAPI.readingListRemove(bibcode);
+        }
+      } else {
+        // Use bulk delete for library papers
+        const ids = Array.from(this.selectedPapers);
+        await window.electronAPI.deletePapersBulk(ids);
+      }
 
       // Clear selection
       this.selectedPapers.clear();
@@ -7397,8 +7862,12 @@ class ADSReader {
 
       // Reload papers list
       await this.loadPapers();
-      const info = await window.electronAPI.getLibraryInfo(this.libraryPath);
-      if (info) this.updateLibraryDisplay(info);
+      if (isReadingList) {
+        await this.updateReadingListCount();
+      } else {
+        const info = await window.electronAPI.getLibraryInfo(this.libraryPath);
+        if (info) this.updateLibraryDisplay(info);
+      }
       this.updateSelectionUI();
 
     } catch (error) {
@@ -9673,6 +10142,16 @@ class ADSReader {
           id: p.bibcode, // Use bibcode as ID for ADS papers
           isAdsSearch: true
         }));
+
+        // Check which papers are in reading list
+        const bibcodes = this.papers.map(p => p.bibcode).filter(Boolean);
+        if (bibcodes.length > 0) {
+          const inReadingList = await window.electronAPI.readingListCheckBibcodes(bibcodes);
+          const readingListSet = new Set(inReadingList);
+          this.papers.forEach(p => {
+            p.inReadingList = readingListSet.has(p.bibcode);
+          });
+        }
 
         // Show search toolbar
         this.showAdsSearchToolbar(query, result.data.numFound);

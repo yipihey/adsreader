@@ -3416,6 +3416,13 @@ ipcMain.handle('ads-import-papers', async (event, selectedPapers) => {
         available_sources: availableSources.length > 0 ? JSON.stringify(availableSources) : null
       });
 
+      // Remove from reading list if present (paper is now in library)
+      if (processedPaper.bibcode && database.isInReadingList(processedPaper.bibcode)) {
+        const cache = getReadingListCache();
+        if (cache) cache.remove(processedPaper.bibcode);
+        database.removeFromReadingList(processedPaper.bibcode);
+      }
+
       sendConsoleLog(`[${processedPaper.bibcode}] ✓ Imported`, 'success');
       return {
         success: true,
@@ -6463,6 +6470,312 @@ ipcMain.handle('temp-pdf-clear', async () => {
 
 ipcMain.handle('temp-pdf-stats', async () => {
   return tempPdfCache.getStats();
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// READING LIST
+// ═══════════════════════════════════════════════════════════════════════════
+
+const { ReadingListCache } = require('./src/lib/files/reading-list-cache.cjs');
+let readingListCache = null;
+
+function getReadingListCache() {
+  const libPath = store.get('libraryPath');
+  if (!readingListCache && libPath) {
+    readingListCache = new ReadingListCache(libPath);
+  }
+  return readingListCache;
+}
+
+// Check if a paper is in the reading list
+ipcMain.handle('reading-list-has', async (event, { bibcode }) => {
+  return database.isInReadingList(bibcode);
+});
+
+// Get all reading list papers
+ipcMain.handle('reading-list-get-all', async () => {
+  return database.getReadingList();
+});
+
+// Get reading list count
+ipcMain.handle('reading-list-count', async () => {
+  return database.getReadingListCount();
+});
+
+// Get a single reading list paper
+ipcMain.handle('reading-list-get', async (event, { bibcode }) => {
+  return database.getReadingListPaper(bibcode);
+});
+
+// Add paper to reading list (with optional PDF download)
+ipcMain.handle('reading-list-add', async (event, { paper, downloadPdf = true }) => {
+  try {
+    // Check if already in library
+    if (paper.bibcode && database.getPaperByBibcode(paper.bibcode)) {
+      return { success: false, error: 'Paper is already in library' };
+    }
+
+    // Check if already in reading list
+    if (paper.bibcode && database.isInReadingList(paper.bibcode)) {
+      return { success: false, error: 'Paper is already in reading list' };
+    }
+
+    const cache = getReadingListCache();
+    let pdfPath = null;
+    let pdfSource = null;
+    let relativePath = null;
+
+    // Download PDF if requested
+    if (downloadPdf && cache) {
+      // Try to get PDF from temp cache first
+      const tempEntry = tempPdfCache.get(paper.bibcode);
+      if (tempEntry) {
+        pdfPath = cache.save(paper.bibcode, tempEntry.data, tempEntry.source);
+        pdfSource = tempEntry.source;
+        relativePath = cache.getRelativePath(paper.bibcode, pdfSource);
+        sendConsoleLog(`Saved PDF from temp cache to reading list: ${paper.bibcode}`, 'info');
+      } else {
+        // Download new PDF
+        const proxyUrl = store.get('library_proxy_url', '');
+        const result = await tempPdfCache.downloadForPaper(paper, proxyUrl);
+        if (result.success) {
+          pdfPath = cache.save(paper.bibcode, result.data, result.source);
+          pdfSource = result.source;
+          relativePath = cache.getRelativePath(paper.bibcode, pdfSource);
+          sendConsoleLog(`Downloaded PDF for reading list: ${paper.bibcode}`, 'info');
+        }
+      }
+    }
+
+    // Add to database
+    const id = database.addToReadingList({
+      ...paper,
+      pdf_path: relativePath,
+      pdf_source: pdfSource
+    });
+
+    return {
+      success: true,
+      id,
+      pdfPath,
+      pdfSource
+    };
+  } catch (error) {
+    sendConsoleLog(`Error adding to reading list: ${error.message}`, 'error');
+    return { success: false, error: error.message };
+  }
+});
+
+// Batch add papers to reading list (parallel processing)
+ipcMain.handle('reading-list-add-batch', async (event, { papers, downloadPdf = true }) => {
+  const CONCURRENCY = 10;
+  const results = { added: [], skipped: [], failed: [] };
+
+  sendConsoleLog(`Adding ${papers.length} papers to reading list...`, 'info');
+
+  // Filter out papers already in library or reading list
+  const papersToAdd = papers.filter(paper => {
+    if (paper.bibcode && database.getPaperByBibcode(paper.bibcode)) {
+      results.skipped.push({ bibcode: paper.bibcode, reason: 'Already in library' });
+      return false;
+    }
+    if (paper.bibcode && database.isInReadingList(paper.bibcode)) {
+      results.skipped.push({ bibcode: paper.bibcode, reason: 'Already in reading list' });
+      return false;
+    }
+    return true;
+  });
+
+  if (papersToAdd.length === 0) {
+    return { success: true, results };
+  }
+
+  // Process in parallel batches
+  for (let i = 0; i < papersToAdd.length; i += CONCURRENCY) {
+    const batch = papersToAdd.slice(i, i + CONCURRENCY);
+    const batchNum = Math.floor(i / CONCURRENCY) + 1;
+    const totalBatches = Math.ceil(papersToAdd.length / CONCURRENCY);
+
+    sendConsoleLog(`Processing batch ${batchNum}/${totalBatches} (${batch.length} papers)...`, 'info');
+
+    const batchResults = await Promise.all(
+      batch.map(async (paper) => {
+        try {
+          const cache = getReadingListCache();
+          let pdfPath = null, pdfSource = null, relativePath = null;
+
+          if (downloadPdf && cache) {
+            // Check temp cache first (already downloaded during search)
+            const tempEntry = tempPdfCache.get(paper.bibcode);
+            if (tempEntry) {
+              pdfPath = cache.save(paper.bibcode, tempEntry.data, tempEntry.source);
+              pdfSource = tempEntry.source;
+              relativePath = cache.getRelativePath(paper.bibcode, pdfSource);
+              sendConsoleLog(`Saved ${paper.bibcode} from temp cache`, 'info');
+            } else {
+              // Download new PDF
+              const proxyUrl = store.get('library_proxy_url', '');
+              const result = await tempPdfCache.downloadForPaper(paper, proxyUrl);
+              if (result.success) {
+                pdfPath = cache.save(paper.bibcode, result.data, result.source);
+                pdfSource = result.source;
+                relativePath = cache.getRelativePath(paper.bibcode, pdfSource);
+                sendConsoleLog(`Downloaded ${paper.bibcode}`, 'info');
+              }
+            }
+          }
+
+          const id = database.addToReadingList({
+            ...paper,
+            pdf_path: relativePath,
+            pdf_source: pdfSource
+          });
+
+          return { success: true, bibcode: paper.bibcode, id, pdfPath };
+        } catch (error) {
+          console.error(`Error adding ${paper.bibcode} to reading list:`, error);
+          return { success: false, bibcode: paper.bibcode, error: error.message };
+        }
+      })
+    );
+
+    // Collect results
+    for (const r of batchResults) {
+      if (r.success) results.added.push(r);
+      else results.failed.push(r);
+    }
+
+    // Rate limit between batches
+    if (i + CONCURRENCY < papersToAdd.length) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+  }
+
+  sendConsoleLog(`Added ${results.added.length} papers to reading list (${results.skipped.length} skipped, ${results.failed.length} failed)`, 'success');
+  return { success: true, results };
+});
+
+// Remove paper from reading list
+ipcMain.handle('reading-list-remove', async (event, { bibcode }) => {
+  try {
+    // Delete PDF file
+    const cache = getReadingListCache();
+    if (cache) {
+      cache.remove(bibcode);
+    }
+
+    // Remove from database
+    database.removeFromReadingList(bibcode);
+
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// Get PDF path for reading list paper
+ipcMain.handle('reading-list-get-pdf-path', async (event, { bibcode }) => {
+  console.log(`[reading-list-get-pdf-path] Looking up: ${bibcode}`);
+  const cache = getReadingListCache();
+  if (!cache) {
+    console.log(`[reading-list-get-pdf-path] No cache available`);
+    return null;
+  }
+
+  const found = cache.findAny(bibcode);
+  console.log(`[reading-list-get-pdf-path] ${bibcode}: ${found ? found.path : 'not found'}`);
+  return found ? found.path : null;
+});
+
+// Update reading list paper (e.g., view position)
+ipcMain.handle('reading-list-update', async (event, { bibcode, updates }) => {
+  database.updateReadingListPaper(bibcode, updates);
+  return { success: true };
+});
+
+// Promote reading list paper to library
+ipcMain.handle('reading-list-promote', async (event, { bibcode }) => {
+  try {
+    const paper = database.getReadingListPaper(bibcode);
+    if (!paper) {
+      return { success: false, error: 'Paper not found in reading list' };
+    }
+
+    // Get PDF from reading list cache
+    const cache = getReadingListCache();
+    const pdfInfo = cache ? cache.findAny(bibcode) : null;
+
+    // Add to library using existing flow
+    const token = store.get('ads_token', '');
+
+    // Fetch fresh metadata from ADS if we have a token
+    let adsData = {};
+    if (token && bibcode) {
+      try {
+        const searchResult = await adsApi.search(token, `bibcode:"${bibcode}"`, 'date desc', 1);
+        if (searchResult.docs && searchResult.docs.length > 0) {
+          const doc = searchResult.docs[0];
+          adsData = {
+            bibcode: doc.bibcode,
+            title: Array.isArray(doc.title) ? doc.title[0] : doc.title,
+            authors: doc.author || [],
+            year: doc.year,
+            journal: doc.pub,
+            abstract: doc.abstract,
+            doi: doc.doi ? doc.doi[0] : null,
+            arxiv_id: doc.arxiv_id,
+            citation_count: doc.citation_count || 0
+          };
+        }
+      } catch (e) {
+        sendConsoleLog(`Could not fetch ADS data for promotion: ${e.message}`, 'warn');
+      }
+    }
+
+    // Merge reading list data with fresh ADS data
+    const paperData = {
+      ...paper,
+      ...adsData,
+      isReadingList: undefined
+    };
+
+    // Add paper to library
+    const paperId = database.addPaper(paperData);
+
+    // If we have a PDF, move it to the library
+    if (pdfInfo && fs.existsSync(pdfInfo.path)) {
+      if (fileManager) {
+        // Add file to paper_files and content-addressed storage
+        // Pass the file path (not buffer) - fileManager.addFile expects a path
+        const fileRecord = await fileManager.addFile(paperId, pdfInfo.path, {
+          originalName: `${bibcode}_${pdfInfo.source}.pdf`,
+          mimeType: 'application/pdf',
+          sourceType: pdfInfo.source
+        });
+        sendConsoleLog(`Moved PDF to library: ${bibcode}`, 'info');
+      }
+    }
+
+    // Remove from reading list (including PDF)
+    if (cache) {
+      cache.remove(bibcode);
+    }
+    database.removeFromReadingList(bibcode);
+
+    return {
+      success: true,
+      paperId,
+      title: paperData.title
+    };
+  } catch (error) {
+    sendConsoleLog(`Error promoting to library: ${error.message}`, 'error');
+    return { success: false, error: error.message };
+  }
+});
+
+// Check which bibcodes are in reading list (for batch checking)
+ipcMain.handle('reading-list-check-bibcodes', async (event, { bibcodes }) => {
+  return database.checkBibcodesInReadingList(bibcodes);
 });
 
 // Create application menu

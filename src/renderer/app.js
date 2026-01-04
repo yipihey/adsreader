@@ -1932,13 +1932,20 @@ class ADSReader {
           const attachment = option.dataset.attachment;
 
           if (action === 'view') {
+            // Find the file in paper_files and get its path
+            const allFiles = await window.electronAPI.paperFiles.list(paper.id);
+            let targetFile = null;
             if (attachment) {
-              // View attachment
-              paper.pdf_path = `papers/${attachment}`;
+              targetFile = allFiles.find(f => f.filename === attachment);
             } else if (source) {
-              // View downloaded source
-              const baseFilename = paper.bibcode ? paper.bibcode.replace(/\//g, '_') : `paper_${paper.id}`;
-              paper.pdf_path = source === 'LEGACY' ? `papers/${baseFilename}.pdf` : `papers/${baseFilename}_${source}.pdf`;
+              targetFile = allFiles.find(f => f.source_type === source);
+            }
+            if (targetFile) {
+              const filePath = await window.electronAPI.paperFiles.getPath(targetFile.id);
+              paper._pdfFilePath = filePath;
+              paper._pdfFileId = targetFile.id;
+              paper._pdfSourceType = targetFile.source_type;
+              this.currentPdfSource = targetFile.source_type;
             }
             await this.loadPDF(paper);
           } else if (action === 'download' && source) {
@@ -2137,17 +2144,8 @@ class ADSReader {
       }
     }
 
-    // Update paper's pdf_path and refresh UI if viewing this paper
+    // Refresh UI if viewing this paper (paper_files will have the new PDF)
     if (this.selectedPaper?.id === data.paperId) {
-      // Set pdf_path from the download result (path is relative like "papers/BIBCODE_EPRINT_PDF.pdf")
-      if (data.path) {
-        this.selectedPaper.pdf_path = data.path;
-        // Also update in papers array
-        const paper = this.papers.find(p => p.id === data.paperId);
-        if (paper) {
-          paper.pdf_path = data.path;
-        }
-      }
       await this.renderFilesPanel(this.selectedPaper);
       // Also reload PDF if on PDF tab
       const currentTab = document.querySelector('.tab-btn.active')?.dataset.tab;
@@ -5364,11 +5362,20 @@ class ADSReader {
 
         if (action === 'view' && papers.length === 1) {
           const paper = papers[0];
+          // Find the file in paper_files and get its path
+          const allFiles = await window.electronAPI.paperFiles.list(paper.id);
+          let targetFile = null;
           if (attachment) {
-            paper.pdf_path = `papers/${attachment}`;
+            targetFile = allFiles.find(f => f.filename === attachment);
           } else if (source) {
-            const baseFilename = paper.bibcode ? paper.bibcode.replace(/\//g, '_') : `paper_${paper.id}`;
-            paper.pdf_path = source === 'LEGACY' ? `papers/${baseFilename}.pdf` : `papers/${baseFilename}_${source}.pdf`;
+            targetFile = allFiles.find(f => f.source_type === source);
+          }
+          if (targetFile) {
+            const filePath = await window.electronAPI.paperFiles.getPath(targetFile.id);
+            paper._pdfFilePath = filePath;
+            paper._pdfFileId = targetFile.id;
+            paper._pdfSourceType = targetFile.source_type;
+            this.currentPdfSource = targetFile.source_type;
           }
           await this.loadPDF(paper);
         } else if (action === 'download' && source) {
@@ -6109,7 +6116,7 @@ class ADSReader {
       return;
     }
 
-    // Get available PDF files using new paper_files API
+    // Get available PDF files using paper_files API
     let pdfFiles = [];
     try {
       const allFiles = await window.electronAPI.paperFiles.list(resolvedPaper.id);
@@ -8256,12 +8263,19 @@ class ADSReader {
       return;
     }
 
+    // Get the actual publisher URL from ADS esources (not link_gateway)
+    const result = await window.electronAPI.getPublisherUrl(paper.bibcode);
+
+    if (!result?.success || !result?.url) {
+      // No publisher URL available
+      this.showNotification(result?.error || 'No publisher URL available', 'warn');
+      return;
+    }
+
+    let url = result.url;
+
     // Get the proxy URL from settings
     let proxyUrl = await window.electronAPI.getLibraryProxy();
-
-    // Construct the publisher PDF URL via ADS link gateway
-    // This will redirect to the publisher and proxy will handle auth
-    let url = `https://ui.adsabs.harvard.edu/link_gateway/${paper.bibcode}/PUB_PDF`;
 
     if (proxyUrl) {
       // Normalize proxy URL format for EZProxy
@@ -8296,7 +8310,7 @@ class ADSReader {
 
     try {
       // Fetch attachments first (always available even without bibcode)
-      const attachments = await window.electronAPI.getAttachments(paperId);
+      const attachments = await window.electronAPI.getAttachments(paperId) || [];
 
       // Try to fetch ADS sources (only if we have a bibcode)
       let sources = { arxiv: false, publisher: false, ads: false };
@@ -8311,7 +8325,7 @@ class ADSReader {
       const annotationCounts = await window.electronAPI.getAnnotationCountsBySource(paperId);
 
       // Check which PDFs are already downloaded
-      const downloadedPdfs = await window.electronAPI.getDownloadedPdfSources(paperId);
+      const downloadedPdfs = await window.electronAPI.getDownloadedPdfSources(paperId) || [];
 
       // Get user's preferred PDF source priority
       const priority = await window.electronAPI.getPdfPriority();
@@ -8363,14 +8377,19 @@ class ADSReader {
       if (availableSources.length === 0 && attachments.length === 1 && attachments[0].file_type === 'pdf') {
         const paper = this.papers.find(p => p.id === paperId);
         if (paper) {
-          const filename = attachments[0].filename;
-          paper.pdf_path = `papers/${filename}`;
+          const attachment = attachments[0];
+          // Get the file path from paper_files
+          const filePath = await window.electronAPI.paperFiles.getPath(attachment.id);
+          paper._pdfFilePath = filePath;
+          paper._pdfFileId = attachment.id;
+          paper._pdfSourceType = attachment.source_type || 'ATTACHMENT';
+          this.currentPdfSource = attachment.source_type || 'ATTACHMENT';
           this.selectedPaper = paper;
           this.switchTab('pdf');
           await this.loadPDF(paper);
           // Save as last viewed
-          this.lastPdfSources[paperId] = `ATTACHMENT:${filename}`;
-          window.electronAPI.setLastPdfSource(paperId, `ATTACHMENT:${filename}`);
+          this.lastPdfSources[paperId] = `ATTACHMENT:${attachment.filename}`;
+          window.electronAPI.setLastPdfSource(paperId, `ATTACHMENT:${attachment.filename}`);
         }
         return;
       }
@@ -8444,10 +8463,18 @@ class ADSReader {
           const isPdf = item.dataset.isPdf === 'true';
 
           if (isPdf) {
-            // Load PDF in viewer - update paper's pdf_path and load
+            // Load PDF in viewer - find file in paper_files and get path
             const paper = this.papers.find(p => p.id === paperId);
             if (paper) {
-              paper.pdf_path = `papers/${filename}`;
+              const allFiles = await window.electronAPI.paperFiles.list(paperId);
+              const targetFile = allFiles.find(f => f.filename === filename);
+              if (targetFile) {
+                const filePath = await window.electronAPI.paperFiles.getPath(targetFile.id);
+                paper._pdfFilePath = filePath;
+                paper._pdfFileId = targetFile.id;
+                paper._pdfSourceType = targetFile.source_type || 'ATTACHMENT';
+                this.currentPdfSource = targetFile.source_type || 'ATTACHMENT';
+              }
               this.selectedPaper = paper;
               this.switchTab('pdf');
               await this.loadPDF(paper);
@@ -8633,7 +8660,16 @@ class ADSReader {
         if (isPdf) {
           const paper = this.papers.find(p => p.id === paperId);
           if (paper) {
-            paper.pdf_path = `papers/${filename}`;
+            // Find file in paper_files and get path
+            const allFiles = await window.electronAPI.paperFiles.list(paperId);
+            const targetFile = allFiles.find(f => f.filename === filename);
+            if (targetFile) {
+              const filePath = await window.electronAPI.paperFiles.getPath(targetFile.id);
+              paper._pdfFilePath = filePath;
+              paper._pdfFileId = targetFile.id;
+              paper._pdfSourceType = targetFile.source_type || 'ATTACHMENT';
+              this.currentPdfSource = targetFile.source_type || 'ATTACHMENT';
+            }
             this.selectedPaper = paper;
             this.switchTab('pdf');
             await this.loadPDF(paper);
@@ -8717,20 +8753,24 @@ class ADSReader {
     }
 
     // Handle ATTACHED type (drag-drop attached PDFs) - these already exist
-    if (sourceType === 'ATTACHED' && paper.bibcode) {
-      const baseFilename = paper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
-      const expectedPath = `papers/${baseFilename}_ATTACHED.pdf`;
-      console.log(`[downloadFromSource] Loading attached PDF: ${expectedPath}`);
-
-      paper.pdf_path = expectedPath;
-      if (this.selectedPaper && this.selectedPaper.id === paperId) {
-        this.selectedPaper.pdf_path = expectedPath;
+    if (sourceType === 'ATTACHED') {
+      console.log(`[downloadFromSource] Loading attached PDF for paper ${paperId}`);
+      const allFiles = await window.electronAPI.paperFiles.list(paperId);
+      const targetFile = allFiles.find(f => f.source_type === 'ATTACHED');
+      if (targetFile) {
+        const filePath = await window.electronAPI.paperFiles.getPath(targetFile.id);
+        paper._pdfFilePath = filePath;
+        paper._pdfFileId = targetFile.id;
+        paper._pdfSourceType = 'ATTACHED';
         this.currentPdfSource = 'ATTACHED';
-        await this.loadPDF(this.selectedPaper);
+        if (this.selectedPaper && this.selectedPaper.id === paperId) {
+          this.selectedPaper._pdfFilePath = filePath;
+          await this.loadPDF(this.selectedPaper);
+        }
+        // Save as last viewed source
+        this.lastPdfSources[paperId] = 'ATTACHED';
+        window.electronAPI.setLastPdfSource(paperId, 'ATTACHED');
       }
-      // Save as last viewed source
-      this.lastPdfSources[paperId] = 'ATTACHED';
-      window.electronAPI.setLastPdfSource(paperId, 'ATTACHED');
       return;
     }
 
@@ -8744,32 +8784,27 @@ class ADSReader {
 
     const requestedSourceType = sourceToType[sourceType];
 
-    // Check if the REQUESTED source's PDF already exists
-    // Filename format: bibcode_SOURCETYPE.pdf
-    if (paper.bibcode) {
-      const baseFilename = paper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
-      const expectedPath = `papers/${baseFilename}_${requestedSourceType}.pdf`;
-
-      console.log(`[downloadFromSource] Checking for PDF: ${expectedPath}`);
-
-      const pdfPath = await window.electronAPI.getPdfPath(expectedPath);
-      if (pdfPath) {
-        console.log(`[downloadFromSource] ${sourceType} PDF found, loading: ${expectedPath}`);
-        paper.pdf_path = expectedPath;
-        if (this.selectedPaper && this.selectedPaper.id === paperId) {
-          this.selectedPaper.pdf_path = expectedPath;
-          this.currentPdfSource = requestedSourceType;
-          await this.loadPDF(this.selectedPaper);
-        }
-        await window.electronAPI.updatePaper(paperId, { pdf_path: expectedPath });
-        // Save as last viewed source
-        this.lastPdfSources[paperId] = requestedSourceType;
-        window.electronAPI.setLastPdfSource(paperId, requestedSourceType);
-        return;
+    // Check if the REQUESTED source's PDF already exists in paper_files
+    const allFiles = await window.electronAPI.paperFiles.list(paperId);
+    const existingFile = allFiles.find(f => f.source_type === requestedSourceType);
+    if (existingFile) {
+      console.log(`[downloadFromSource] ${sourceType} PDF found in paper_files, loading`);
+      const filePath = await window.electronAPI.paperFiles.getPath(existingFile.id);
+      paper._pdfFilePath = filePath;
+      paper._pdfFileId = existingFile.id;
+      paper._pdfSourceType = requestedSourceType;
+      this.currentPdfSource = requestedSourceType;
+      if (this.selectedPaper && this.selectedPaper.id === paperId) {
+        this.selectedPaper._pdfFilePath = filePath;
+        await this.loadPDF(this.selectedPaper);
       }
-
-      console.log(`[downloadFromSource] ${sourceType} PDF not found, proceeding to download`);
+      // Save as last viewed source
+      this.lastPdfSources[paperId] = requestedSourceType;
+      window.electronAPI.setLastPdfSource(paperId, requestedSourceType);
+      return;
     }
+
+    console.log(`[downloadFromSource] ${sourceType} PDF not found, proceeding to download`);
 
     // Publisher PDFs require authentication - open in auth window to download
     if (sourceType === 'publisher') {
@@ -8807,12 +8842,19 @@ class ADSReader {
         const result = await window.electronAPI.downloadPublisherPdf(paperId, publisherUrl, proxyUrl);
 
         if (result.success) {
-          // Update local paper data
-          paper.pdf_path = result.pdf_path;
+          // Get the newly downloaded PDF from paper_files
+          const allFiles = await window.electronAPI.paperFiles.list(paperId);
+          const pubPdf = allFiles.find(f => f.source_type === 'PUB_PDF');
+          if (pubPdf) {
+            const filePath = await window.electronAPI.paperFiles.getPath(pubPdf.id);
+            paper._pdfFilePath = filePath;
+            paper._pdfFileId = pubPdf.id;
+            paper._pdfSourceType = 'PUB_PDF';
+          }
 
           // Reload the PDF if this paper is currently displayed
           if (this.selectedPaper && this.selectedPaper.id === paperId) {
-            this.selectedPaper.pdf_path = result.pdf_path;
+            this.selectedPaper._pdfFilePath = paper._pdfFilePath;
             this.currentPdfSource = 'PUB_PDF';
             await this.loadPDF(this.selectedPaper);
           }
@@ -8869,20 +8911,27 @@ class ADSReader {
       const result = await window.electronAPI.downloadPdfFromSource(paperId, sourceType);
 
       if (result.success) {
-        // Update local paper data
-        paper.pdf_path = result.pdf_path;
+        // Get the newly downloaded PDF from paper_files
+        const downloadedSourceType = sourceMap[sourceType] || sourceType;
+        const allFiles = await window.electronAPI.paperFiles.list(paperId);
+        const newPdf = allFiles.find(f => f.source_type === downloadedSourceType);
+        if (newPdf) {
+          const filePath = await window.electronAPI.paperFiles.getPath(newPdf.id);
+          paper._pdfFilePath = filePath;
+          paper._pdfFileId = newPdf.id;
+          paper._pdfSourceType = downloadedSourceType;
+        }
 
         // Reload the PDF if this paper is currently displayed
         if (this.selectedPaper && this.selectedPaper.id === paperId) {
-          this.selectedPaper.pdf_path = result.pdf_path;
-          this.currentPdfSource = sourceMap[sourceType] || null;
+          this.selectedPaper._pdfFilePath = paper._pdfFilePath;
+          this.currentPdfSource = downloadedSourceType;
           await this.loadPDF(this.selectedPaper);
         }
 
         // Save as last viewed source
-        const savedSourceType = sourceMap[sourceType] || sourceType;
-        this.lastPdfSources[paperId] = savedSourceType;
-        window.electronAPI.setLastPdfSource(paperId, savedSourceType);
+        this.lastPdfSources[paperId] = downloadedSourceType;
+        window.electronAPI.setLastPdfSource(paperId, downloadedSourceType);
 
         // Refresh files panel
         if (this.selectedPaper?.id === paperId) {

@@ -136,6 +136,65 @@ function downloadFile(url, destPath, maxRedirects = 5) {
   });
 }
 
+// Resolve final URL by following redirects (without downloading content)
+// Used to get actual publisher URL from ADS link_gateway
+function resolveRedirects(url, maxRedirects = 10) {
+  return new Promise((resolve, reject) => {
+    if (maxRedirects <= 0) {
+      reject(new Error('Too many redirects'));
+      return;
+    }
+
+    const parsedUrl = new URL(url);
+    const protocol = parsedUrl.protocol === 'https:' ? https : http;
+
+    const options = {
+      hostname: parsedUrl.hostname,
+      port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
+      path: parsedUrl.pathname + parsedUrl.search,
+      method: 'GET',  // Use GET - some servers don't support HEAD
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+        'Accept': '*/*'
+      },
+      rejectUnauthorized: false
+    };
+
+    const req = protocol.request(options, (res) => {
+      // Immediately abort the request - we only want the redirect info
+      req.destroy();
+
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        const redirectUrl = res.headers.location.startsWith('http')
+          ? res.headers.location
+          : `${parsedUrl.protocol}//${parsedUrl.host}${res.headers.location}`;
+        console.log(`Redirect: ${url} -> ${redirectUrl}`);
+        resolveRedirects(redirectUrl, maxRedirects - 1)
+          .then(resolve)
+          .catch(reject);
+      } else {
+        // No more redirects, return the final URL
+        console.log(`Final URL resolved: ${url}`);
+        resolve(url);
+      }
+    });
+
+    req.on('error', (err) => {
+      // If request fails, return the original URL
+      console.log(`Redirect resolution failed for ${url}: ${err.message}`);
+      resolve(url);
+    });
+
+    req.setTimeout(15000, () => {
+      req.destroy();
+      console.log(`Redirect resolution timeout for ${url}`);
+      resolve(url); // Return original on timeout
+    });
+
+    req.end();
+  });
+}
+
 // Download PDF from arXiv
 async function downloadFromArxiv(arxivId, destPath) {
   // Normalize arXiv ID (remove version suffix for URL)
@@ -205,9 +264,15 @@ async function downloadFromADS(adsApi, token, bibcode, destPath, proxyUrl = null
 
   // Apply library proxy for publisher PDFs (PUB_PDF) if proxy is configured
   if (proxyUrl && pdfInfo.type === 'PUB_PDF') {
-    // Encode the target URL and prepend proxy
-    downloadUrl = proxyUrl + encodeURIComponent(pdfInfo.url);
-    console.log(`Using library proxy for PUB_PDF: ${downloadUrl}`);
+    // Resolve ADS link_gateway redirect to get actual publisher URL
+    try {
+      const resolvedUrl = await resolveRedirects(pdfInfo.url);
+      downloadUrl = proxyUrl + encodeURIComponent(resolvedUrl);
+      console.log(`Using library proxy for PUB_PDF: ${resolvedUrl}`);
+    } catch (e) {
+      downloadUrl = proxyUrl + encodeURIComponent(pdfInfo.url);
+      console.log(`Using library proxy for PUB_PDF (unresolved): ${downloadUrl}`);
+    }
   } else {
     console.log(`Downloading from ADS esource (${pdfInfo.type}): ${downloadUrl}`);
   }
@@ -249,20 +314,30 @@ async function downloadPDF(paper, libraryPath, token, adsApi, proxyUrl = null, p
           // Check if already exists
           if (fs.existsSync(destPath)) {
             log(`PDF already exists (${sourceType})`);
-            return { success: true, path: destPath, source: sourceType, pdf_path: `papers/${filename}` };
+            return { success: true, path: destPath, source: sourceType };
           }
 
           let downloadUrl = pdfInfo.url;
           if (proxyUrl && pdfInfo.type.includes('PUB_PDF')) {
-            downloadUrl = proxyUrl + encodeURIComponent(pdfInfo.url);
-            log(`Downloading ${sourceType} via proxy...`);
+            // For publisher PDFs with proxy, resolve the ADS link_gateway redirect
+            // to get the actual publisher URL, then apply proxy to that
+            log(`Resolving publisher URL...`);
+            try {
+              const resolvedUrl = await resolveRedirects(pdfInfo.url);
+              downloadUrl = proxyUrl + encodeURIComponent(resolvedUrl);
+              log(`Downloading ${sourceType} via proxy from: ${resolvedUrl}`);
+            } catch (e) {
+              // Fallback to original URL if redirect resolution fails
+              downloadUrl = proxyUrl + encodeURIComponent(pdfInfo.url);
+              log(`Downloading ${sourceType} via proxy (unresolved)...`);
+            }
           } else {
             log(`Downloading ${sourceType}...`);
           }
 
           await downloadFile(downloadUrl, destPath);
           log(`Downloaded ${sourceType}`, 'success');
-          return { success: true, path: destPath, source: sourceType, pdf_path: `papers/${filename}` };
+          return { success: true, path: destPath, source: sourceType };
         }
       }
     } catch (error) {
@@ -279,13 +354,13 @@ async function downloadPDF(paper, libraryPath, token, adsApi, proxyUrl = null, p
       // Check if already exists
       if (fs.existsSync(destPath)) {
         log(`PDF already exists (arXiv)`);
-        return { success: true, path: destPath, source: 'EPRINT_PDF', pdf_path: `papers/${filename}` };
+        return { success: true, path: destPath, source: 'EPRINT_PDF' };
       }
 
       log(`Downloading from arXiv...`);
       await downloadFromArxiv(paper.arxiv_id, destPath);
       log(`Downloaded from arXiv`, 'success');
-      return { success: true, path: destPath, source: 'EPRINT_PDF', pdf_path: `papers/${filename}` };
+      return { success: true, path: destPath, source: 'EPRINT_PDF' };
     } catch (error) {
       log(`arXiv download failed: ${error.message}`, 'warn');
     }
@@ -295,8 +370,7 @@ async function downloadPDF(paper, libraryPath, token, adsApi, proxyUrl = null, p
   log(`No PDF source available`, 'warn');
   return {
     success: false,
-    reason: 'No PDF source available',
-    pdf_path: null
+    reason: 'No PDF source available'
   };
 }
 
@@ -337,5 +411,6 @@ module.exports = {
   downloadFromADS,
   downloadPDF,
   downloadMultiplePDFs,
-  findPdfUrl
+  findPdfUrl,
+  resolveRedirects
 };

@@ -288,7 +288,9 @@ async function exportBibtex(token, bibcodes) {
 async function getEsources(token, bibcode) {
   try {
     // Need to call the specific esource endpoint to get actual PDF links
-    const result = await adsRequest(`/resolver/${bibcode}/esource`, 'GET', token);
+    // Encode bibcode to handle special chars like & in "A&A"
+    const encodedBibcode = encodeURIComponent(bibcode);
+    const result = await adsRequest(`/resolver/${encodedBibcode}/esource`, 'GET', token);
     console.log('Esources response:', JSON.stringify(result, null, 2));
 
     // Handle different response formats
@@ -301,6 +303,14 @@ async function getEsources(token, bibcode) {
       return result.links.records;
     } else if (result && Array.isArray(result.records)) {
       return result.records;
+    } else if (result && result.action === 'redirect' && result.link) {
+      // Redirect response: { action: "redirect", link: "https://doi.org/..." }
+      // Return as a pseudo-record (typically a DOI link)
+      return [{
+        url: result.link,
+        link_type: 'ESOURCE|PUB_HTML',
+        title: result.link
+      }];
     }
     return [];
   } catch (error) {

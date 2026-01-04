@@ -1975,17 +1975,7 @@ const capacitorAPI = {
           directory: Directory.Documents
         });
         emit('consoleLog', { message: `${sourceType} PDF already downloaded`, level: 'success' });
-        const relativePath = `papers/${filename}`;
-
-        // Update paper's pdf_path if not set
-        if (!paper.pdf_path) {
-          MobileDB.updatePaper(paperId, {
-            pdf_path: relativePath,
-            pdf_source: adsType
-          });
-        }
-
-        return { success: true, pdf_path: relativePath, source: sourceType, alreadyExists: true };
+        return { success: true, source: sourceType, alreadyExists: true };
       } catch (e) {
         // File doesn't exist, proceed with download
       }
@@ -2007,18 +1997,24 @@ const capacitorAPI = {
       });
 
       if (downloadResult.path) {
-        const relativePath = `papers/${filename}`;
-
-        // Update paper's pdf_path if not already set
-        if (!paper.pdf_path) {
-          MobileDB.updatePaper(paperId, {
-            pdf_path: relativePath,
-            pdf_source: adsType
+        // Register in paper_files table (new unified approach)
+        try {
+          const stat = await Filesystem.stat({ path: filePath, directory: Directory.Documents });
+          MobileDB.addPaperFile(paperId, {
+            filename: filename,
+            original_name: filename,
+            mime_type: 'application/pdf',
+            file_size: stat.size || 0,
+            file_role: 'pdf',
+            source_type: adsType,
+            status: 'ready'
           });
+        } catch (e) {
+          console.error('[downloadPdfFromSource] Failed to register paper file:', e);
         }
 
         emit('consoleLog', { message: `${sourceType} PDF downloaded successfully`, level: 'success' });
-        return { success: true, pdf_path: relativePath, source: sourceType };
+        return { success: true, source: sourceType };
       }
 
       return { success: false, error: 'Download failed' };
@@ -4702,25 +4698,8 @@ Provide a clear, accessible explanation.`;
         if (!dbInitialized) await initializeDatabase();
 
         // Get from database
-        let files = MobileDB.getPaperFiles(paperId, filters);
-
-        // If no database records, check legacy pdf_path
-        if (files.length === 0 && (!filters.role || filters.role === 'pdf')) {
-          const paper = MobileDB.getPaper(paperId);
-          if (paper?.pdf_path) {
-            files.push({
-              id: -1,  // Legacy marker
-              paper_id: paperId,
-              filename: paper.pdf_path,
-              original_name: paper.pdf_path.split('/').pop(),
-              mime_type: 'application/pdf',
-              file_role: 'pdf',
-              source_type: paper.pdf_source || 'unknown',
-              status: 'ready'
-            });
-          }
-        }
-
+        // Note: Legacy pdf_path fallback removed - use only paper_files table
+        const files = MobileDB.getPaperFiles(paperId, filters);
         return files;
       } catch (error) {
         console.error('[paperFiles.list] Error:', error);
@@ -4732,28 +4711,9 @@ Provide a clear, accessible explanation.`;
       try {
         if (!dbInitialized) await initializeDatabase();
 
-        // Try database first
+        // Note: Legacy pdf_path fallback removed - use only paper_files table
         const pdfs = MobileDB.getPaperPdfs(paperId);
-        if (pdfs.length > 0) {
-          return pdfs[0];
-        }
-
-        // Fallback to legacy pdf_path
-        const paper = MobileDB.getPaper(paperId);
-        if (paper?.pdf_path) {
-          return {
-            id: -1,
-            paper_id: paperId,
-            filename: paper.pdf_path,
-            original_name: paper.pdf_path.split('/').pop(),
-            mime_type: 'application/pdf',
-            file_role: 'pdf',
-            source_type: paper.pdf_source || 'unknown',
-            status: 'ready'
-          };
-        }
-
-        return null;
+        return pdfs.length > 0 ? pdfs[0] : null;
       } catch (error) {
         console.error('[paperFiles.getPrimaryPdf] Error:', error);
         return null;

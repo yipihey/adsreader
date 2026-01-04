@@ -119,6 +119,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setAdsToken: (token) => ipcRenderer.invoke('set-ads-token', token),
   getLibraryProxy: () => ipcRenderer.invoke('get-library-proxy'),
   setLibraryProxy: (proxyUrl) => ipcRenderer.invoke('set-library-proxy', proxyUrl),
+  getPublisherUrl: (bibcode) => ipcRenderer.invoke('get-publisher-url', bibcode),
   getPdfPriority: () => ipcRenderer.invoke('get-pdf-priority'),
   setPdfPriority: (priority) => ipcRenderer.invoke('set-pdf-priority', priority),
   adsSearch: (query, options) => ipcRenderer.invoke('ads-search', query, options),
@@ -243,6 +244,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // PDF Page Rotations
   getPageRotations: (paperId, pdfSource) => ipcRenderer.invoke('get-page-rotations', paperId, pdfSource),
   setPageRotation: (paperId, pageNumber, rotation, pdfSource) => ipcRenderer.invoke('set-page-rotation', paperId, pageNumber, rotation, pdfSource),
+
+  // PDF Source Helpers (convenience wrappers around paper-files)
+  getDownloadedPdfSources: (paperId) => ipcRenderer.invoke('get-downloaded-pdf-sources', paperId),
+  getPdfAttachments: (paperId) => ipcRenderer.invoke('get-pdf-attachments', paperId),
+  getAttachments: (paperId) => ipcRenderer.invoke('get-attachments', paperId),
 
   // ═══════════════════════════════════════════════════════════════════════════
   // PAPER FILES (Unified file management system)

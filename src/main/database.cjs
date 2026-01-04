@@ -109,11 +109,12 @@ function closeDatabase() {
  */
 function addPaper(paper) {
   const now = new Date().toISOString();
+  // Note: pdf_path column is deprecated - use paper_files table instead
   const stmt = db.prepare(`
     INSERT INTO papers (bibcode, doi, arxiv_id, title, authors, year, journal,
-                        abstract, keywords, pdf_path, text_path, bibtex,
+                        abstract, keywords, text_path, bibtex,
                         read_status, added_date, modified_date, import_source, import_source_key, citation_count, available_sources)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   stmt.run([
@@ -126,7 +127,6 @@ function addPaper(paper) {
     paper.journal || null,
     paper.abstract || null,
     JSON.stringify(paper.keywords || []),
-    paper.pdf_path || null,
     paper.text_path || null,
     paper.bibtex || null,
     paper.read_status || 'unread',
@@ -147,6 +147,7 @@ function addPaper(paper) {
 }
 
 // Bulk insert papers for fast .bib import - no intermediate saves
+// Note: pdf_path column is deprecated - use paper_files table instead
 function addPapersBulk(papers, progressCallback = null) {
   const now = new Date().toISOString();
   const inserted = [];
@@ -154,9 +155,9 @@ function addPapersBulk(papers, progressCallback = null) {
 
   const stmt = db.prepare(`
     INSERT INTO papers (bibcode, doi, arxiv_id, title, authors, year, journal,
-                        abstract, keywords, pdf_path, text_path, bibtex,
+                        abstract, keywords, text_path, bibtex,
                         read_status, added_date, modified_date, import_source, import_source_key, citation_count, available_sources)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   for (let i = 0; i < papers.length; i++) {
@@ -200,7 +201,6 @@ function addPapersBulk(papers, progressCallback = null) {
           paper.journal || null,
           paper.abstract || null,
           JSON.stringify(paper.keywords || []),
-          paper.pdf_path || null,
           paper.text_path || null,
           paper.bibtex || null,
           paper.read_status || 'unread',

@@ -1634,15 +1634,29 @@ ipcMain.handle('import-pdfs', async () => {
     try {
       const importResult = await pdfImport.importPDF(filePath, libraryPath);
 
-      // Add to database
+      // Add to database (no pdf_path - use paper_files instead)
       const paperId = database.addPaper({
         title: importResult.title,
-        pdf_path: importResult.pdf_path,
         text_path: importResult.text_path,
         bibcode: importResult.bibcode,
         arxiv_id: importResult.arxiv_id,
         doi: importResult.doi
       });
+
+      // Register PDF in paper_files table
+      if (importResult.pdf_path) {
+        const filename = path.basename(importResult.pdf_path);
+        const fullPath = path.join(libraryPath, importResult.pdf_path);
+        database.addPaperFile(paperId, {
+          filename: filename,
+          original_name: path.basename(filePath),
+          mime_type: 'application/pdf',
+          file_size: fs.existsSync(fullPath) ? fs.statSync(fullPath).size : 0,
+          file_role: 'pdf',
+          source_type: 'IMPORTED',
+          status: 'ready'
+        });
+      }
 
       // Auto-fetch ADS metadata - try even without identifiers using title/author search
       console.log(`Auto-fetching ADS metadata for paper ${paperId}...`);
@@ -1696,12 +1710,26 @@ ipcMain.handle('import-files', async () => {
       const importResult = await pdfImport.importPDF(filePath, libraryPath);
       const paperId = database.addPaper({
         title: importResult.title,
-        pdf_path: importResult.pdf_path,
         text_path: importResult.text_path,
         bibcode: importResult.bibcode,
         arxiv_id: importResult.arxiv_id,
         doi: importResult.doi
       });
+
+      // Register PDF in paper_files table
+      if (importResult.pdf_path) {
+        const filename = path.basename(importResult.pdf_path);
+        const fullPath = path.join(libraryPath, importResult.pdf_path);
+        database.addPaperFile(paperId, {
+          filename: filename,
+          original_name: path.basename(filePath),
+          mime_type: 'application/pdf',
+          file_size: fs.existsSync(fullPath) ? fs.statSync(fullPath).size : 0,
+          file_role: 'pdf',
+          source_type: 'IMPORTED',
+          status: 'ready'
+        });
+      }
 
       // Auto-fetch ADS metadata
       const adsResult = await fetchAndApplyAdsMetadata(paperId, importResult.extractedMetadata);
@@ -1891,6 +1919,52 @@ ipcMain.handle('set-library-proxy', (event, proxyUrl) => {
   }
   store.set('libraryProxyUrl', proxyUrl || null);
   return { success: true };
+});
+
+// Get actual publisher URL from ADS esources (for use with library proxy)
+ipcMain.handle('get-publisher-url', async (event, bibcode) => {
+  const token = store.get('adsToken');
+  if (!token || !bibcode) {
+    return { success: false, error: 'No token or bibcode' };
+  }
+
+  try {
+    const esources = await adsApi.getEsources(token, bibcode);
+    if (esources && esources.length > 0) {
+      // First try PUB_PDF source (direct publisher PDF)
+      const pubPdf = esources.find(s =>
+        s.link_type?.includes('PUB_PDF') || s.type?.includes('PUB_PDF')
+      );
+      if (pubPdf?.url) {
+        console.log(`Found PUB_PDF: ${pubPdf.url}`);
+        return { success: true, url: pubPdf.url };
+      }
+
+      // Fall back to PUB_HTML (DOI link) - proxy can handle these
+      const pubHtml = esources.find(s =>
+        s.link_type?.includes('PUB_HTML') || s.type?.includes('PUB_HTML')
+      );
+      if (pubHtml?.url) {
+        // Decode URL-encoded DOI for cleaner proxy URLs
+        const decodedUrl = decodeURIComponent(pubHtml.url);
+        console.log(`Using PUB_HTML (DOI): ${decodedUrl}`);
+        return { success: true, url: decodedUrl, isDoi: true };
+      }
+    }
+    // No publisher URL available
+    // Check if it's an arXiv-only paper
+    const hasArxiv = esources && esources.some(s =>
+      s.link_type?.includes('EPRINT') || s.type?.includes('EPRINT')
+    );
+    if (hasArxiv) {
+      console.log(`No publisher URL - arXiv preprint only`);
+      return { success: false, error: 'No publisher version available (arXiv preprint only)' };
+    }
+    console.log(`No publisher URL found for ${bibcode}`);
+    return { success: false, error: 'No publisher URL available' };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
 });
 
 // PDF source priority preference
@@ -2182,8 +2256,7 @@ ipcMain.handle('download-pdf-from-source', async (event, paperId, sourceType) =>
     // Check if this source's PDF already exists
     if (fs.existsSync(destPath)) {
       sendConsoleLog(`${sourceType} PDF already downloaded`, 'success');
-      const relativePath = `papers/${filename}`;
-      return { success: true, path: destPath, source: sourceType, pdf_path: relativePath, alreadyExists: true };
+      return { success: true, path: destPath, source: sourceType, alreadyExists: true };
     }
 
     // Download the PDF
@@ -2191,8 +2264,15 @@ ipcMain.handle('download-pdf-from-source', async (event, paperId, sourceType) =>
 
     // Apply proxy for publisher PDFs if configured
     if (sourceType === 'publisher' && proxyUrl) {
-      downloadUrl = proxyUrl + encodeURIComponent(targetSource.url);
-      sendConsoleLog(`Using library proxy: ${proxyUrl}`, 'info');
+      // Resolve ADS link_gateway redirects to get actual publisher URL
+      try {
+        const resolvedUrl = await pdfDownload.resolveRedirects(targetSource.url);
+        downloadUrl = proxyUrl + encodeURIComponent(resolvedUrl);
+        sendConsoleLog(`Using library proxy: ${resolvedUrl}`, 'info');
+      } catch (e) {
+        downloadUrl = proxyUrl + encodeURIComponent(targetSource.url);
+        sendConsoleLog(`Using library proxy (unresolved): ${targetSource.url}`, 'info');
+      }
     }
 
     sendConsoleLog(`Downloading from: ${downloadUrl}`, 'info');
@@ -2200,12 +2280,20 @@ ipcMain.handle('download-pdf-from-source', async (event, paperId, sourceType) =>
     try {
       await pdfDownload.downloadFile(downloadUrl, destPath);
 
-      // Update paper with PDF path (use this source as the current/active one)
+      // Register in paper_files table (new unified approach)
       const relativePath = `papers/${filename}`;
-      database.updatePaper(paperId, { pdf_path: relativePath });
+      database.addPaperFile(paperId, {
+        filename: filename,
+        original_name: filename,
+        mime_type: 'application/pdf',
+        file_size: fs.statSync(destPath).size,
+        file_role: 'pdf',
+        source_type: targetType,
+        status: 'ready'
+      });
 
       sendConsoleLog(`Downloaded ${sourceType} PDF successfully`, 'success');
-      return { success: true, path: destPath, source: sourceType, pdf_path: relativePath };
+      return { success: true, path: destPath, source: sourceType };
     } catch (downloadError) {
       // If publisher download failed (auth required), try fallback sources
       if (sourceType === 'publisher' && downloadError.message.includes('authentication')) {
@@ -2227,9 +2315,17 @@ ipcMain.handle('download-pdf-from-source', async (event, paperId, sourceType) =>
             }
             await pdfDownload.downloadFile(arxivUrl, arxivPath);
             const relativePath = `papers/${arxivFilename}`;
-            database.updatePaper(paperId, { pdf_path: relativePath });
+            database.addPaperFile(paperId, {
+              filename: arxivFilename,
+              original_name: arxivFilename,
+              mime_type: 'application/pdf',
+              file_size: fs.statSync(arxivPath).size,
+              file_role: 'pdf',
+              source_type: 'EPRINT_PDF',
+              status: 'ready'
+            });
             sendConsoleLog(`Downloaded from arXiv (fallback)`, 'success');
-            return { success: true, path: arxivPath, source: 'arxiv', pdf_path: relativePath, fallback: true };
+            return { success: true, path: arxivPath, source: 'arxiv', fallback: true };
           } catch (arxivError) {
             sendConsoleLog(`arXiv fallback failed: ${arxivError.message}`, 'warn');
           }
@@ -2245,9 +2341,17 @@ ipcMain.handle('download-pdf-from-source', async (event, paperId, sourceType) =>
           try {
             await pdfDownload.downloadFile(adsSource.url, adsPath);
             const relativePath = `papers/${adsFilename}`;
-            database.updatePaper(paperId, { pdf_path: relativePath });
+            database.addPaperFile(paperId, {
+              filename: adsFilename,
+              original_name: adsFilename,
+              mime_type: 'application/pdf',
+              file_size: fs.statSync(adsPath).size,
+              file_role: 'pdf',
+              source_type: 'ADS_PDF',
+              status: 'ready'
+            });
             sendConsoleLog(`Downloaded from ADS (fallback)`, 'success');
-            return { success: true, path: adsPath, source: 'ads', pdf_path: relativePath, fallback: true };
+            return { success: true, path: adsPath, source: 'ads', fallback: true };
           } catch (adsError) {
             sendConsoleLog(`ADS fallback failed: ${adsError.message}`, 'warn');
           }
@@ -5034,12 +5138,11 @@ function initializePaperFilesSystem(libraryPath) {
           }
 
           result.path = `papers/${filename}`;
-          database.updatePaper(paper.id, { pdf_path: result.path });
 
-          // Register in paper_files table with ACTUAL source type
+          // Register in paper_files table with normalized source type
           const fileSize = fs.existsSync(destPath) ? fs.statSync(destPath).size : 0;
           const existingFiles = database.getPaperFiles(paper.id);
-          const alreadyExists = existingFiles.some(f => f.source_type === actualSource);
+          const alreadyExists = existingFiles.some(f => f.source_type === normalizedSource);
 
           if (!alreadyExists) {
             database.addPaperFile(paper.id, {
@@ -5048,7 +5151,7 @@ function initializePaperFilesSystem(libraryPath) {
               mime_type: 'application/pdf',
               file_size: fileSize,
               file_role: 'pdf',
-              source_type: actualSource,
+              source_type: normalizedSource,
               status: 'ready'
             });
           }
@@ -5230,20 +5333,16 @@ ipcMain.handle('paper-files:rescan', async (event, paperId) => {
     const registeredSources = new Set(registeredFiles.map(f => f.source_type));
 
     // Check for PDFs matching this paper's bibcode
+    // Source types must match what download handlers use (EPRINT_PDF, PUB_PDF, etc.)
     const baseFilename = (paper.bibcode || `paper_${paper.id}`).replace(/[^a-zA-Z0-9._-]/g, '_');
-    const sourceTypes = [
-      { pattern: 'EPRINT_PDF', normalized: 'arxiv' },
-      { pattern: 'PUB_PDF', normalized: 'publisher' },
-      { pattern: 'ADS_PDF', normalized: 'ads_scan' },
-      { pattern: 'ATTACHED', normalized: 'manual' }
-    ];
+    const sourceTypes = ['EPRINT_PDF', 'PUB_PDF', 'ADS_PDF', 'ATTACHED', 'IMPORTED'];
 
     let found = 0;
-    for (const { pattern, normalized } of sourceTypes) {
-      const filename = `${baseFilename}_${pattern}.pdf`;
+    for (const sourceType of sourceTypes) {
+      const filename = `${baseFilename}_${sourceType}.pdf`;
       const filePath = path.join(papersDir, filename);
 
-      if (fs.existsSync(filePath) && !registeredSources.has(normalized)) {
+      if (fs.existsSync(filePath) && !registeredSources.has(sourceType)) {
         const stats = fs.statSync(filePath);
         database.addPaperFile(paperId, {
           filename: filename,
@@ -5251,7 +5350,7 @@ ipcMain.handle('paper-files:rescan', async (event, paperId) => {
           mime_type: 'application/pdf',
           file_size: stats.size,
           file_role: 'pdf',
-          source_type: normalized,
+          source_type: sourceType,
           status: 'ready'
         });
         found++;
@@ -5283,6 +5382,55 @@ ipcMain.handle('paper-files:get-path', async (event, fileId) => {
   } catch (error) {
     console.error('paper-files:get-path error:', error);
     return null;
+  }
+});
+
+// ============ PDF SOURCE HELPERS ============
+// Convenience handlers that wrap paper-files for common queries
+
+// Get list of downloaded PDF source types for a paper
+ipcMain.handle('get-downloaded-pdf-sources', async (event, paperId) => {
+  if (!dbInitialized) return [];
+
+  try {
+    const files = database.getPaperFiles(paperId);
+    // Return unique source_type values for PDF files
+    const sources = files
+      .filter(f => f.file_role === 'pdf' && f.source_type)
+      .map(f => f.source_type);
+    return [...new Set(sources)];
+  } catch (error) {
+    console.error('get-downloaded-pdf-sources error:', error);
+    return [];
+  }
+});
+
+// Get PDF attachments for a paper
+ipcMain.handle('get-pdf-attachments', async (event, paperId) => {
+  if (!dbInitialized) return [];
+
+  try {
+    const files = database.getPaperFiles(paperId);
+    return files.filter(f =>
+      f.file_role === 'attachment' &&
+      (f.mime_type === 'application/pdf' || f.filename?.toLowerCase().endsWith('.pdf'))
+    );
+  } catch (error) {
+    console.error('get-pdf-attachments error:', error);
+    return [];
+  }
+});
+
+// Get all attachments for a paper
+ipcMain.handle('get-attachments', async (event, paperId) => {
+  if (!dbInitialized) return [];
+
+  try {
+    const files = database.getPaperFiles(paperId);
+    return files.filter(f => f.file_role === 'attachment');
+  } catch (error) {
+    console.error('get-attachments error:', error);
+    return [];
   }
 });
 
@@ -5460,9 +5608,7 @@ ipcMain.handle('download-publisher-pdf', async (event, paperId, publisherUrl, pr
   // Check if publisher PDF already exists
   if (fs.existsSync(destPath)) {
     sendConsoleLog(`Publisher PDF already downloaded`, 'success');
-    const relativePath = `papers/${filename}`;
-    database.updatePaper(paperId, { pdf_path: relativePath });
-    return { success: true, path: destPath, source: 'publisher', pdf_path: relativePath, alreadyExists: true };
+    return { success: true, path: destPath, source: 'publisher', alreadyExists: true };
   }
 
   return new Promise((resolve) => {
@@ -5609,12 +5755,25 @@ ipcMain.handle('download-publisher-pdf', async (event, paperId, publisherUrl, pr
       if (resolved) return;
       resolved = true;
       downloadCompleted = true;
-      database.updatePaper(paperId, { pdf_path: relativePath });
+      // Register in paper_files table (new unified approach)
+      try {
+        database.addPaperFile(paperId, {
+          filename: filename,
+          original_name: filename,
+          mime_type: 'application/pdf',
+          file_size: fs.statSync(destPath).size,
+          file_role: 'pdf',
+          source_type: 'PUB_PDF',
+          status: 'ready'
+        });
+      } catch (e) {
+        console.error('Failed to register paper file:', e);
+      }
       console.log('PDF saved successfully:', destPath);
       if (!authWindow.isDestroyed()) {
         authWindow.close();
       }
-      resolve({ success: true, path: destPath, pdf_path: relativePath });
+      resolve({ success: true, path: destPath });
     }
 
     function finishWithError(error) {

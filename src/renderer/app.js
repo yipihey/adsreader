@@ -4570,19 +4570,32 @@ class ADSReader {
       return;
     }
 
-    let added = 0;
-    for (const paper of papersToAdd) {
-      const result = await window.electronAPI.smartSearchAddToLibrary(paper.bibcode);
-      if (result.success) {
-        paper.inLibrary = true;
-        paper.libraryPaperId = result.paperId;
-        added++;
-      }
-    }
+    // Use batch import for faster processing
+    this.showNotification(`Importing ${papersToAdd.length} papers...`, 'info');
+    const result = await window.electronAPI.adsImportPapers(papersToAdd);
 
-    this.renderPaperList();
-    const msg = added === 1 ? 'Added 1 paper to library' : `Added ${added} papers to library`;
-    this.showNotification(msg, 'success');
+    if (result.success) {
+      const added = result.results.imported.length;
+      const skipped = result.results.skipped.length;
+
+      // Mark papers as in library
+      for (const imported of result.results.imported) {
+        const paper = this.papers.find(p => p.bibcode === imported.paper?.bibcode);
+        if (paper) {
+          paper.inLibrary = true;
+          paper.libraryPaperId = imported.id;
+        }
+      }
+
+      this.renderPaperList();
+      let msg = added === 1 ? 'Added 1 paper to library' : `Added ${added} papers to library`;
+      if (skipped > 0) {
+        msg += ` (${skipped} already in library)`;
+      }
+      this.showNotification(msg, 'success');
+    } else {
+      this.showNotification(`Import failed: ${result.error}`, 'error');
+    }
   }
 
   updateNavActiveStates() {
@@ -6939,7 +6952,7 @@ class ADSReader {
     }
   }
 
-  // Shared import method for refs/cites - uses add-to-library pattern
+  // Shared import method for refs/cites - uses batch import for speed
   async importPapersFromBibcodes(papers, source) {
     if (papers.length === 0) {
       this.showNotification('No papers to import', 'info');
@@ -6948,23 +6961,17 @@ class ADSReader {
 
     this.showNotification(`Importing ${papers.length} ${source}...`, 'info');
 
-    let imported = 0;
-    let failed = 0;
+    // Convert to format expected by adsImportPapers
+    const papersToImport = papers.map(p => ({
+      bibcode: p.bibcode || p,
+      title: p.title,
+      authors: p.authors,
+      year: p.year,
+      journal: p.journal
+    }));
 
-    for (const paper of papers) {
-      try {
-        const bibcode = paper.bibcode || paper;
-        const result = await window.electronAPI.smartSearchAddToLibrary(bibcode);
-        if (result.success) {
-          imported++;
-        } else {
-          failed++;
-        }
-      } catch (error) {
-        console.error('Import error for paper:', paper, error);
-        failed++;
-      }
-    }
+    // Use batch import for faster processing
+    const result = await window.electronAPI.adsImportPapers(papersToImport);
 
     // Reload papers list
     await this.loadPapers();
@@ -6972,10 +6979,20 @@ class ADSReader {
     if (info) this.updateLibraryDisplay(info);
 
     // Show result
-    if (failed > 0) {
-      this.showNotification(`Imported ${imported} papers, ${failed} failed`, imported > 0 ? 'warn' : 'error');
+    if (result.success) {
+      const imported = result.results.imported.length;
+      const failed = result.results.failed.length;
+      const skipped = result.results.skipped.length;
+
+      if (failed > 0) {
+        this.showNotification(`Imported ${imported} papers, ${failed} failed`, imported > 0 ? 'warn' : 'error');
+      } else if (skipped > 0) {
+        this.showNotification(`Imported ${imported} ${source} (${skipped} already in library)`, 'success');
+      } else {
+        this.showNotification(`Imported ${imported} ${source}`, 'success');
+      }
     } else {
-      this.showNotification(`Imported ${imported} ${source}`, 'success');
+      this.showNotification(`Import failed: ${result.error}`, 'error');
     }
   }
 

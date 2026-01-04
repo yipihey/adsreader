@@ -2144,14 +2144,10 @@ class ADSReader {
       }
     }
 
-    // Refresh UI if viewing this paper (paper_files will have the new PDF)
+    // Refresh UI if viewing this paper
+    // Use displayPaper() to refresh _pdfFilePath from paper_files API
     if (this.selectedPaper?.id === data.paperId) {
-      await this.renderFilesPanel(this.selectedPaper);
-      // Also reload PDF if on PDF tab
-      const currentTab = document.querySelector('.tab-btn.active')?.dataset.tab;
-      if (currentTab === 'pdf') {
-        await this.loadPDF(this.selectedPaper);
-      }
+      await this.displayPaper(this.selectedPaper);
     }
   }
 

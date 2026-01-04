@@ -5251,7 +5251,9 @@ ipcMain.handle('paper-files:list', async (event, paperId, filters = {}) => {
       return [];
     }
 
-    return fileManager.getFilesForPaper(paperId, filters);
+    const files = await fileManager.getFilesForPaper(paperId, filters);
+    console.log('[paper-files:list] paperId:', paperId, 'found:', files.length, 'files:', files.map(f => ({ id: f.id, source_type: f.source_type, file_hash: f.file_hash?.substring(0, 8) })));
+    return files;
   } catch (error) {
     console.error('paper-files:list error:', error);
     return [];
@@ -5350,10 +5352,12 @@ ipcMain.handle('paper-files:get-path', async (event, fileId) => {
 
   try {
     if (!fileManager) {
+      console.log('[paper-files:get-path] No fileManager');
       return null;
     }
 
     const file = fileManager.getFile(fileId);
+    console.log('[paper-files:get-path] fileId:', fileId, 'file:', file ? { id: file.id, path: file.path, filename: file.filename, file_hash: file.file_hash?.substring(0, 8) } : null);
     // file.path is already an absolute path from getStoragePath()
     if (!file || !file.path) return null;
 

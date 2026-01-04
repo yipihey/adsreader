@@ -2769,6 +2769,15 @@ body.ios-platform .pdf-container {
   color: var(--text-primary);
 }
 
+.tab-btn.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.tab-btn.disabled:hover {
+  background: none;
+}
+
 .tab-btn-icon {
   width: 14px;
   height: 14px;
@@ -3871,6 +3880,28 @@ body.ios-platform .pdf-container {
 .ads-search-bar input:focus {
   outline: none;
   border-color: var(--accent);
+}
+
+/* Source selector dropdown */
+.source-selector {
+  padding: 10px 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  min-width: 110px;
+}
+
+.source-selector:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.source-selector option {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
 }
 
 .ads-help-text {
@@ -7898,6 +7929,21 @@ body.pdf-fullscreen .detail-panel {
 
 .sheet-option:active {
   background: var(--bg-hover);
+}
+
+.sheet-option.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.sheet-option.disabled:active {
+  background: none;
+}
+
+.sheet-option-note {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-left: auto;
 }
 
 .sheet-option:last-child {

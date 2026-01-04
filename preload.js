@@ -145,6 +145,36 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // PLUGIN SYSTEM
+  // ═══════════════════════════════════════════════════════════════════════════
+  plugins: {
+    // List all registered plugins
+    list: () => ipcRenderer.invoke('plugin:list'),
+
+    // Get/set active plugin
+    getActive: () => ipcRenderer.invoke('plugin:get-active'),
+    setActive: (pluginId) => ipcRenderer.invoke('plugin:set-active', { pluginId }),
+
+    // Search using active or specified plugin
+    search: (query, pluginId) => ipcRenderer.invoke('plugin:search', { query, pluginId }),
+
+    // Lookup paper by identifier (DOI, arXiv ID, bibcode)
+    lookup: (identifier) => ipcRenderer.invoke('plugin:lookup', { identifier }),
+
+    // Get PDF sources for a paper
+    getPdfSources: (paper) => ipcRenderer.invoke('plugin:get-pdf-sources', { paper }),
+
+    // Get references for a paper
+    getReferences: (pluginId, sourceId) => ipcRenderer.invoke('plugin:get-references', { pluginId, sourceId }),
+
+    // Get citing papers
+    getCitations: (pluginId, sourceId) => ipcRenderer.invoke('plugin:get-citations', { pluginId, sourceId }),
+
+    // Get BibTeX for a paper
+    getBibtex: (pluginId, sourceId) => ipcRenderer.invoke('plugin:get-bibtex', { pluginId, sourceId })
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // BIBTEX
   // ═══════════════════════════════════════════════════════════════════════════
   copyCite: (paperId, style) => ipcRenderer.invoke('copy-cite', paperId, style),
@@ -228,6 +258,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAdsNLPrompt: () => ipcRenderer.invoke('get-ads-nl-prompt'),
   setAdsNLPrompt: (prompt) => ipcRenderer.invoke('set-ads-nl-prompt', prompt),
   resetAdsNLPrompt: () => ipcRenderer.invoke('reset-ads-nl-prompt'),
+
+  // Plugin-specific NL prompts
+  getNLPrompt: (pluginId) => ipcRenderer.invoke('get-nl-prompt', pluginId),
+  setNLPrompt: (pluginId, prompt) => ipcRenderer.invoke('set-nl-prompt', { pluginId, prompt }),
+  resetNLPrompt: (pluginId) => ipcRenderer.invoke('reset-nl-prompt', pluginId),
 
   // ═══════════════════════════════════════════════════════════════════════════
   // ANNOTATIONS

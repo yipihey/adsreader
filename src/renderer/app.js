@@ -36,6 +36,7 @@ class ADSReader {
     this.currentAdsQuery = null;      // Current query for "Save as Smart Search"
     this.currentAdsNLQuery = null;    // Natural language query that generated currentAdsQuery
     this.adsSearchResultCount = 0;    // Total results from ADS
+    this.currentSearchSource = 'ads'; // Active search source plugin ('ads', 'arxiv', etc.)
 
     // Refs/Cites query mode (unified approach)
     this.refsQueryBibcode = null;      // Bibcode we're viewing refs for
@@ -2803,13 +2804,22 @@ class ADSReader {
         const tabName = tabBtn.dataset.tab;
 
         // Intercept refs/cites tabs to execute query instead of switching
-        if ((tabName === 'refs' || tabName === 'cites') && this.selectedPaper && this.selectedPaper.bibcode) {
-          if (tabName === 'refs') {
-            this.executeRefsQuery(this.selectedPaper.bibcode, this.selectedPaper);
-          } else {
-            this.executeCitesQuery(this.selectedPaper.bibcode, this.selectedPaper);
+        if (tabName === 'refs' || tabName === 'cites') {
+          // Check if source supports refs/cites (arXiv doesn't)
+          if (this.selectedPaper?.source === 'arxiv' ||
+              (this.selectedPaper?.arxivId && !this.selectedPaper?.bibcode)) {
+            this.showNotification('References and citations are not available for arXiv papers', 'warn');
+            return;
           }
-          return; // Don't proceed with normal tab switch
+
+          if (this.selectedPaper && this.selectedPaper.bibcode) {
+            if (tabName === 'refs') {
+              this.executeRefsQuery(this.selectedPaper.bibcode, this.selectedPaper);
+            } else {
+              this.executeCitesQuery(this.selectedPaper.bibcode, this.selectedPaper);
+            }
+            return; // Don't proceed with normal tab switch
+          }
         }
 
         this.switchTab(tabName);
@@ -3234,6 +3244,11 @@ class ADSReader {
     document.getElementById('ads-pane-search-btn')?.addEventListener('click', () => this.executeAdsPaneSearch());
     document.getElementById('ads-pane-query-input')?.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') this.executeAdsPaneSearch();
+    });
+
+    // Source selector for search
+    document.getElementById('search-source-selector')?.addEventListener('change', (e) => {
+      this.onSearchSourceChanged(e.target.value);
     });
 
     // Save ADS Search as Smart Search
@@ -3926,8 +3941,14 @@ class ADSReader {
         break;
       case 'R':
         // Shift+R: View references
-        if (this.selectedPaper && this.selectedPaper.bibcode) {
-          this.executeRefsQuery(this.selectedPaper.bibcode, this.selectedPaper);
+        if (this.selectedPaper) {
+          // Check if source supports refs/cites
+          if (this.selectedPaper.source === 'arxiv' ||
+              (this.selectedPaper.arxivId && !this.selectedPaper.bibcode)) {
+            this.showNotification('References not available for arXiv papers', 'warn');
+          } else if (this.selectedPaper.bibcode) {
+            this.executeRefsQuery(this.selectedPaper.bibcode, this.selectedPaper);
+          }
         }
         break;
       case 'r':
@@ -3940,8 +3961,14 @@ class ADSReader {
         break;
       case 'C':
         // Shift+C: View citations
-        if (this.selectedPaper && this.selectedPaper.bibcode) {
-          this.executeCitesQuery(this.selectedPaper.bibcode, this.selectedPaper);
+        if (this.selectedPaper) {
+          // Check if source supports refs/cites
+          if (this.selectedPaper.source === 'arxiv' ||
+              (this.selectedPaper.arxivId && !this.selectedPaper.bibcode)) {
+            this.showNotification('Citations not available for arXiv papers', 'warn');
+          } else if (this.selectedPaper.bibcode) {
+            this.executeCitesQuery(this.selectedPaper.bibcode, this.selectedPaper);
+          }
         }
         break;
       case 's':
@@ -5027,7 +5054,7 @@ class ADSReader {
       ` : '';
 
       return `
-      <div class="paper-swipe-container${paper.inLibrary ? ' in-library' : ''}" data-id="${paper.id}" data-index="${index}" data-bibcode="${paper.bibcode || ''}">
+      <div class="paper-swipe-container${paper.inLibrary ? ' in-library' : ''}" data-id="${paper.id}" data-index="${index}" data-bibcode="${paper.bibcode || ''}" data-arxiv-id="${paper.arxivId || ''}" data-source="${paper.source || 'ads'}">
         ${swipeActionHtml}
         <div class="paper-item${this.selectedPapers.has(paper.id) ? ' selected' : ''}${paper.inLibrary ? ' dimmed' : ''}" data-id="${paper.id}" data-index="${index}" draggable="${!isAdsSearchView}">
           <div class="paper-item-title">
@@ -5144,7 +5171,7 @@ class ADSReader {
       ` : '';
 
       html += `
-        <div class="paper-swipe-container${paper.inLibrary ? ' in-library' : ''}" data-id="${paper.id}" data-index="${i}" data-bibcode="${paper.bibcode || ''}"
+        <div class="paper-swipe-container${paper.inLibrary ? ' in-library' : ''}" data-id="${paper.id}" data-index="${i}" data-bibcode="${paper.bibcode || ''}" data-arxiv-id="${paper.arxivId || ''}" data-source="${paper.source || 'ads'}"
              style="position: absolute; top: ${top}px; left: 0; right: 0; height: ${this.PAPER_ITEM_HEIGHT}px;">
           ${swipeActionHtml}
           <div class="paper-item${this.selectedPapers.has(paper.id) ? ' selected' : ''}${paper.inLibrary ? ' dimmed' : ''}"
@@ -5255,8 +5282,17 @@ class ADSReader {
     container.querySelectorAll('.paper-action-btn.link-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        const bibcode = btn.closest('.paper-swipe-container').dataset.bibcode;
-        if (bibcode) window.electronAPI.openExternal(`https://ui.adsabs.harvard.edu/abs/${bibcode}`);
+        const container = btn.closest('.paper-swipe-container');
+        const source = container.dataset.source;
+        const arxivId = container.dataset.arxivId;
+        const bibcode = container.dataset.bibcode;
+
+        // Open in appropriate source based on paper origin
+        if (source === 'arxiv' || (arxivId && !bibcode)) {
+          window.electronAPI.openExternal(`https://arxiv.org/abs/${arxivId}`);
+        } else if (bibcode) {
+          window.electronAPI.openExternal(`https://ui.adsabs.harvard.edu/abs/${bibcode}`);
+        }
       });
     });
 
@@ -6249,6 +6285,12 @@ class ADSReader {
     const paper = this.papers.find(p => p.id === paperId);
     if (!paper) return;
 
+    // Check if source supports refs/cites
+    const supportsRefsCites = paper.bibcode && paper.source !== 'arxiv' &&
+      !(paper.arxivId && !paper.bibcode);
+    const refsCitesDisabled = supportsRefsCites ? '' : ' disabled';
+    const refsCitesNote = supportsRefsCites ? '' : '<span class="sheet-option-note">Not available for arXiv</span>';
+
     // Remove any existing info sheet
     const existingOverlay = document.getElementById('info-sheet-overlay');
     const existingSheet = document.getElementById('info-sheet');
@@ -6274,18 +6316,20 @@ class ADSReader {
             <span class="sheet-option-label">Info</span>
           </div>
         </div>
-        <div class="sheet-option" data-tab="refs">
+        <div class="sheet-option${refsCitesDisabled}" data-tab="refs">
           <div class="sheet-option-content">
             <span class="sheet-option-icon">📚</span>
             <span class="sheet-option-label">References</span>
           </div>
+          ${refsCitesNote}
           <span class="sheet-option-count" id="info-sheet-refs-count"></span>
         </div>
-        <div class="sheet-option" data-tab="cites">
+        <div class="sheet-option${refsCitesDisabled}" data-tab="cites">
           <div class="sheet-option-content">
             <span class="sheet-option-icon">🔗</span>
             <span class="sheet-option-label">Citations</span>
           </div>
+          ${refsCitesNote}
           <span class="sheet-option-count" id="info-sheet-cites-count"></span>
         </div>
         <button class="sheet-cancel">Cancel</button>
@@ -6319,6 +6363,12 @@ class ADSReader {
 
     sheet.querySelectorAll('.sheet-option[data-tab]').forEach(option => {
       option.addEventListener('click', () => {
+        // Don't process clicks on disabled options
+        if (option.classList.contains('disabled')) {
+          this.showNotification('Not available for arXiv papers', 'warn');
+          return;
+        }
+
         const tab = option.dataset.tab;
         hideSheet();
         // Switch to the detail view which has the tabs
@@ -8059,9 +8109,26 @@ class ADSReader {
     const citeBtn = document.getElementById('copy-cite-btn');
     if (citeBtn) citeBtn.disabled = !hasSelection;
 
-    // Link button - enabled when paper has bibcode
+    // Link button - enabled when paper has bibcode or arxivId
     const linkBtn = document.getElementById('open-ads-btn');
-    if (linkBtn) linkBtn.disabled = !hasBibcode;
+    const hasWebLink = hasBibcode || this.selectedPaper?.arxivId;
+    if (linkBtn) linkBtn.disabled = !hasWebLink;
+
+    // Refs/Cites tabs - disabled for sources that don't support them (e.g., arXiv)
+    const supportsRefsCites = hasSelection && hasBibcode &&
+      this.selectedPaper?.source !== 'arxiv' &&
+      !(this.selectedPaper?.arxivId && !this.selectedPaper?.bibcode);
+
+    const refsTab = document.querySelector('.tab-btn[data-tab="refs"]');
+    const citesTab = document.querySelector('.tab-btn[data-tab="cites"]');
+    if (refsTab) {
+      refsTab.classList.toggle('disabled', !supportsRefsCites);
+      refsTab.title = supportsRefsCites ? 'References' : 'Not available for arXiv papers';
+    }
+    if (citesTab) {
+      citesTab.classList.toggle('disabled', !supportsRefsCites);
+      citesTab.title = supportsRefsCites ? 'Citations' : 'Not available for arXiv papers';
+    }
   }
 
   async fetchMetadata() {
@@ -8693,9 +8760,24 @@ class ADSReader {
     }
   }
 
+  openInWeb() {
+    if (!this.selectedPaper) return;
+
+    // Check source or identifiers to determine correct URL
+    if (this.selectedPaper.source === 'arxiv' ||
+        (this.selectedPaper.arxivId && !this.selectedPaper.bibcode)) {
+      // arXiv paper - open arXiv abstract page
+      const arxivId = this.selectedPaper.arxivId || this.selectedPaper.id;
+      window.electronAPI.openExternal(`https://arxiv.org/abs/${arxivId}`);
+    } else if (this.selectedPaper.bibcode) {
+      // ADS paper - open ADS abstract page
+      window.electronAPI.openExternal(`https://ui.adsabs.harvard.edu/abs/${this.selectedPaper.bibcode}`);
+    }
+  }
+
+  // Alias for backwards compatibility
   openInADS() {
-    if (!this.selectedPaper?.bibcode) return;
-    window.electronAPI.openExternal(`https://ui.adsabs.harvard.edu/abs/${this.selectedPaper.bibcode}`);
+    this.openInWeb();
   }
 
   async attachFiles() {
@@ -8733,8 +8815,15 @@ class ADSReader {
     this.hideContextMenu();
     // If multiple selected, open the first one; otherwise use rightClickedPaper or selectedPaper
     const paper = this.rightClickedPaper || this.selectedPaper;
-    if (!paper?.bibcode) return;
-    window.electronAPI.openExternal(`https://ui.adsabs.harvard.edu/abs/${paper.bibcode}`);
+    if (!paper) return;
+
+    // Check source or identifiers to determine correct URL
+    if (paper.source === 'arxiv' || (paper.arxivId && !paper.bibcode)) {
+      const arxivId = paper.arxivId || paper.id;
+      window.electronAPI.openExternal(`https://arxiv.org/abs/${arxivId}`);
+    } else if (paper.bibcode) {
+      window.electronAPI.openExternal(`https://ui.adsabs.harvard.edu/abs/${paper.bibcode}`);
+    }
   }
 
   async openPublisherPDF() {
@@ -10118,15 +10207,52 @@ class ADSReader {
     searchBtn.textContent = 'Searching...';
     searchBtn.disabled = true;
 
+    const source = this.currentSearchSource || 'ads';
+
     try {
-      const result = await window.electronAPI.adsImportSearch(query, { rows: 1000 });
+      let result;
+      let papers = [];
+      let totalResults = 0;
+
+      if (source === 'arxiv') {
+        // Use plugin system for arXiv search
+        result = await window.electronAPI.plugins.search({ raw: query }, 'arxiv');
+        if (result.success && result.data) {
+          papers = result.data.papers || [];
+          totalResults = result.data.totalResults || papers.length;
+
+          // Map arXiv papers to expected format
+          papers = papers.map(p => ({
+            ...p,
+            id: p.arxivId || p.sourceId,
+            bibcode: null, // arXiv doesn't have bibcodes
+            isAdsSearch: true,
+            source: 'arxiv'
+          }));
+        }
+      } else {
+        // Use existing ADS import for ADS search
+        result = await window.electronAPI.adsImportSearch(query, { rows: 1000 });
+        if (result.success && result.data) {
+          papers = result.data.papers || [];
+          totalResults = result.data.numFound || papers.length;
+
+          // Map ADS papers
+          papers = papers.map(p => ({
+            ...p,
+            id: p.bibcode,
+            isAdsSearch: true,
+            source: 'ads'
+          }));
+        }
+      }
 
       if (result.success) {
         // Store query for "Save as Smart Search"
         this.currentAdsQuery = query;
-        this.adsSearchResultCount = result.data.numFound;
+        this.adsSearchResultCount = totalResults;
 
-        // Enter ad-hoc ADS search mode
+        // Enter ad-hoc search mode
         this.isAdsSearchActive = true;
         this.currentSmartSearch = null;
         this.currentView = null;
@@ -10136,25 +10262,28 @@ class ADSReader {
         this.selectedPapers.clear();
         this.selectedPaper = null;
 
-        // Convert results to paper-like objects (same as smart search)
-        this.papers = result.data.papers.map(p => ({
-          ...p,
-          id: p.bibcode, // Use bibcode as ID for ADS papers
-          isAdsSearch: true
-        }));
+        // Set papers
+        this.papers = papers;
 
-        // Check which papers are in reading list
-        const bibcodes = this.papers.map(p => p.bibcode).filter(Boolean);
+        // Check which papers are in reading list (by bibcode or arxivId)
+        const bibcodes = this.papers
+          .map(p => p.bibcode || p.arxivId)
+          .filter(Boolean);
         if (bibcodes.length > 0) {
-          const inReadingList = await window.electronAPI.readingListCheckBibcodes(bibcodes);
-          const readingListSet = new Set(inReadingList);
-          this.papers.forEach(p => {
-            p.inReadingList = readingListSet.has(p.bibcode);
-          });
+          try {
+            const inReadingList = await window.electronAPI.readingListCheckBibcodes(bibcodes);
+            const readingListSet = new Set(inReadingList);
+            this.papers.forEach(p => {
+              p.inReadingList = readingListSet.has(p.bibcode) || readingListSet.has(p.arxivId);
+            });
+          } catch (e) {
+            // Ignore reading list check errors
+          }
         }
 
-        // Show search toolbar
-        this.showAdsSearchToolbar(query, result.data.numFound);
+        // Show search toolbar with source name
+        const sourceNames = { 'ads': 'ADS Search', 'arxiv': 'arXiv Search' };
+        this.showSearchToolbar(query, totalResults, sourceNames[source] || 'Search');
 
         // Switch to library tab to show results in main list
         this.switchTab('library');
@@ -10164,7 +10293,7 @@ class ADSReader {
         this.sortPapers();
         this.renderPaperList();
 
-        // Switch to Abstract tab for viewing (ADS results don't have local PDFs)
+        // Switch to Abstract tab for viewing (search results don't have local PDFs)
         if (!this.isIOS) {
           this.switchTab('abstract');
         }
@@ -10179,18 +10308,263 @@ class ADSReader {
     }
   }
 
+  /**
+   * Handle search source change from dropdown
+   * @param {string} sourceId - Plugin ID ('ads', 'arxiv', etc.)
+   */
+  onSearchSourceChanged(sourceId) {
+    this.currentSearchSource = sourceId;
+
+    // Update title
+    const titleEl = document.getElementById('search-source-title');
+    const inputEl = document.getElementById('ads-pane-query-input');
+    const shortcutsEl = document.querySelector('.ads-shortcuts');
+    const examplesEl = document.getElementById('ads-examples-content');
+    const nlInputEl = document.getElementById('ads-nl-input');
+
+    const sourceConfig = {
+      'ads': {
+        title: 'Search NASA ADS',
+        placeholder: 'e.g., author:smith year:2020-2024 galaxy',
+        nlPlaceholder: 'e.g., papers by Smith about galaxy formation in the last 5 years',
+        showShortcuts: true
+      },
+      'arxiv': {
+        title: 'Search arXiv',
+        placeholder: 'e.g., ti:machine learning AND au:hinton',
+        nlPlaceholder: 'e.g., recent papers on transformers in computer vision',
+        showShortcuts: true
+      }
+    };
+
+    const config = sourceConfig[sourceId] || sourceConfig['ads'];
+
+    if (titleEl) titleEl.textContent = config.title;
+    if (inputEl) inputEl.placeholder = config.placeholder;
+    if (nlInputEl) nlInputEl.placeholder = config.nlPlaceholder;
+
+    if (shortcutsEl) {
+      // Update shortcuts for arXiv (different syntax)
+      if (sourceId === 'arxiv') {
+        shortcutsEl.innerHTML = `
+          <button class="ads-shortcut-btn" data-insert="au:" data-target="ads-pane-query-input">au:</button>
+          <button class="ads-shortcut-btn" data-insert="ti:" data-target="ads-pane-query-input">ti:</button>
+          <button class="ads-shortcut-btn" data-insert="abs:" data-target="ads-pane-query-input">abs:</button>
+          <button class="ads-shortcut-btn" data-insert="cat:" data-target="ads-pane-query-input">cat:</button>
+          <button class="ads-shortcut-btn" data-insert="all:" data-target="ads-pane-query-input">all:</button>
+        `;
+      } else {
+        shortcutsEl.innerHTML = `
+          <button class="ads-shortcut-btn" data-insert="author:" data-target="ads-pane-query-input">author:</button>
+          <button class="ads-shortcut-btn" data-insert="year:" data-target="ads-pane-query-input">year:</button>
+          <button class="ads-shortcut-btn" data-insert="title:" data-target="ads-pane-query-input">title:</button>
+          <button class="ads-shortcut-btn" data-insert="abs:" data-target="ads-pane-query-input">abs:</button>
+          <button class="ads-shortcut-btn" data-insert="bibcode:" data-target="ads-pane-query-input">bibcode:</button>
+          <button class="ads-shortcut-btn" data-insert="arXiv:" data-target="ads-pane-query-input">arXiv:</button>
+          <button class="ads-shortcut-btn" data-insert="doi:" data-target="ads-pane-query-input">doi:</button>
+        `;
+      }
+      // Rebind shortcut button handlers
+      this.bindShortcutButtons();
+    }
+
+    // Update example searches
+    if (examplesEl) {
+      if (sourceId === 'arxiv') {
+        examplesEl.innerHTML = `
+          <div class="ads-example-item" data-query='au:hinton'>
+            <span class="ads-example-label">Author search</span>
+            <code class="ads-example-query">au:hinton</code>
+            <button class="ads-example-use-btn">Use</button>
+          </div>
+          <div class="ads-example-item" data-query='ti:"neural network"'>
+            <span class="ads-example-label">Title keyword</span>
+            <code class="ads-example-query">ti:"neural network"</code>
+            <button class="ads-example-use-btn">Use</button>
+          </div>
+          <div class="ads-example-item" data-query='abs:"dark matter"'>
+            <span class="ads-example-label">Abstract keyword</span>
+            <code class="ads-example-query">abs:"dark matter"</code>
+            <button class="ads-example-use-btn">Use</button>
+          </div>
+          <div class="ads-example-item" data-query='cat:cs.AI'>
+            <span class="ads-example-label">Category: AI</span>
+            <code class="ads-example-query">cat:cs.AI</code>
+            <button class="ads-example-use-btn">Use</button>
+          </div>
+          <div class="ads-example-item" data-query='cat:astro-ph.GA'>
+            <span class="ads-example-label">Category: Galaxies</span>
+            <code class="ads-example-query">cat:astro-ph.GA</code>
+            <button class="ads-example-use-btn">Use</button>
+          </div>
+          <div class="ads-example-item" data-query='cat:hep-th'>
+            <span class="ads-example-label">Category: HEP Theory</span>
+            <code class="ads-example-query">cat:hep-th</code>
+            <button class="ads-example-use-btn">Use</button>
+          </div>
+          <div class="ads-example-item" data-query='ti:transformer AND cat:cs.CL'>
+            <span class="ads-example-label">Title + Category</span>
+            <code class="ads-example-query">ti:transformer AND cat:cs.CL</code>
+            <button class="ads-example-use-btn">Use</button>
+          </div>
+          <div class="ads-example-item" data-query='au:lecun AND ti:learning'>
+            <span class="ads-example-label">Author + Title</span>
+            <code class="ads-example-query">au:lecun AND ti:learning</code>
+            <button class="ads-example-use-btn">Use</button>
+          </div>
+          <div class="ads-example-item" data-query='all:"large language model"'>
+            <span class="ads-example-label">All fields</span>
+            <code class="ads-example-query">all:"large language model"</code>
+            <button class="ads-example-use-btn">Use</button>
+          </div>
+        `;
+      } else {
+        // ADS examples (default)
+        examplesEl.innerHTML = `
+          <div class="ads-example-item" data-query='author:"Einstein, A"'>
+            <span class="ads-example-label">Author search</span>
+            <code class="ads-example-query">author:"Einstein, A"</code>
+            <button class="ads-example-use-btn">Use</button>
+          </div>
+          <div class="ads-example-item" data-query='author:"^Smith"'>
+            <span class="ads-example-label">First author only</span>
+            <code class="ads-example-query">author:"^Smith"</code>
+            <button class="ads-example-use-btn">Use</button>
+          </div>
+          <div class="ads-example-item" data-query="year:2025-">
+            <span class="ads-example-label">Recent papers</span>
+            <code class="ads-example-query">year:2025-</code>
+            <button class="ads-example-use-btn">Use</button>
+          </div>
+          <div class="ads-example-item" data-query='abs:"dark matter"'>
+            <span class="ads-example-label">Abstract keyword</span>
+            <code class="ads-example-query">abs:"dark matter"</code>
+            <button class="ads-example-use-btn">Use</button>
+          </div>
+          <div class="ads-example-item" data-query='title:"JWST"'>
+            <span class="ads-example-label">Title keyword</span>
+            <code class="ads-example-query">title:"JWST"</code>
+            <button class="ads-example-use-btn">Use</button>
+          </div>
+          <div class="ads-example-item" data-query="bibstem:ApJ">
+            <span class="ads-example-label">Specific journal</span>
+            <code class="ads-example-query">bibstem:ApJ</code>
+            <button class="ads-example-use-btn">Use</button>
+          </div>
+          <div class="ads-example-item" data-query="property:refereed">
+            <span class="ads-example-label">Only refereed papers</span>
+            <code class="ads-example-query">property:refereed</code>
+            <button class="ads-example-use-btn">Use</button>
+          </div>
+          <div class="ads-example-item" data-query="citation_count:[100 TO *]">
+            <span class="ads-example-label">Highly cited (100+)</span>
+            <code class="ads-example-query">citation_count:[100 TO *]</code>
+            <button class="ads-example-use-btn">Use</button>
+          </div>
+          <div class="ads-example-item" data-query='author:"Smith" year:2020-2024 abs:"exoplanets"'>
+            <span class="ads-example-label">Combined: author + year + topic</span>
+            <code class="ads-example-query">author:"Smith" year:2020-2024 abs:"exoplanets"</code>
+            <button class="ads-example-use-btn">Use</button>
+          </div>
+        `;
+      }
+      // Rebind example button handlers
+      this.bindExampleButtons();
+    }
+
+    // Load plugin-specific NL prompt
+    this.loadPluginNLPrompt(sourceId);
+
+    // Notify plugin system (optional, for future use)
+    window.electronAPI.plugins?.setActive(sourceId);
+  }
+
+  /**
+   * Load the NL prompt for the current plugin
+   */
+  async loadPluginNLPrompt(sourceId) {
+    try {
+      const prompt = await window.electronAPI.getNLPrompt(sourceId);
+      document.getElementById('ads-nl-prompt-textarea').value = prompt;
+    } catch (e) {
+      console.warn('Failed to load NL prompt:', e);
+    }
+  }
+
+  /**
+   * Rebind shortcut button click handlers after DOM update
+   * Uses cloneNode to remove all old event listeners
+   */
+  bindShortcutButtons() {
+    document.querySelectorAll('.ads-shortcut-btn').forEach(btn => {
+      // Clone to remove old listeners
+      const newBtn = btn.cloneNode(true);
+      btn.parentNode.replaceChild(newBtn, btn);
+
+      newBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const insertText = newBtn.dataset.insert;
+        const targetId = newBtn.dataset.target;
+        const input = document.getElementById(targetId);
+        if (input && insertText) {
+          const pos = input.selectionStart;
+          const before = input.value.substring(0, pos);
+          const after = input.value.substring(pos);
+          input.value = before + insertText + after;
+          input.focus();
+          input.selectionStart = input.selectionEnd = pos + insertText.length;
+        }
+      });
+    });
+  }
+
+  /**
+   * Rebind example button click handlers after DOM update
+   * Uses cloneNode to remove all old event listeners
+   */
+  bindExampleButtons() {
+    document.querySelectorAll('.ads-example-use-btn').forEach(btn => {
+      // Clone to remove old listeners
+      const newBtn = btn.cloneNode(true);
+      btn.parentNode.replaceChild(newBtn, btn);
+
+      newBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const item = newBtn.closest('.ads-example-item');
+        const query = item?.dataset.query;
+        if (query) {
+          const input = document.getElementById('ads-pane-query-input');
+          if (input) {
+            input.value = query;
+            input.focus();
+          }
+        }
+      });
+    });
+  }
+
   showAdsSearchToolbar(query, resultCount) {
+    this.showSearchToolbar(query, resultCount, 'ADS Search');
+  }
+
+  showSearchToolbar(query, resultCount, sourceName = 'Search') {
     const toolbar = document.getElementById('smart-search-toolbar');
     if (toolbar) {
       toolbar.classList.remove('hidden');
-      document.getElementById('search-toolbar-name').textContent = 'ADS Search';
+      document.getElementById('search-toolbar-name').textContent = sourceName;
       document.getElementById('search-toolbar-meta').textContent =
         `${resultCount} results${resultCount > 1000 ? ' (showing first 1000)' : ''} • "${query}"`;
 
-      // Show "Save as Smart Search" button
+      // Show "Save as Smart Search" button only for ADS (smart searches use ADS queries)
       const saveBtn = document.getElementById('ads-save-search-btn');
       if (saveBtn) {
-        saveBtn.classList.remove('hidden');
+        if (sourceName === 'ADS Search') {
+          saveBtn.classList.remove('hidden');
+        } else {
+          saveBtn.classList.add('hidden');
+        }
       }
     }
   }
@@ -10627,6 +11001,7 @@ class ADSReader {
     const statusEl = document.getElementById('ads-nl-status');
     const statusText = document.getElementById('ads-nl-status-text');
     const translateBtn = document.getElementById('ads-nl-translate-btn');
+    const pluginId = this.currentSearchSource || 'ads';
 
     // Show loading state
     statusEl.classList.remove('hidden', 'error');
@@ -10637,9 +11012,9 @@ class ADSReader {
       // Save any pending prompt edits before translating
       const promptEditor = document.getElementById('ads-nl-prompt-editor');
       if (!promptEditor.classList.contains('hidden')) {
-        await this.saveAdsNLPrompt();
+        await this.saveNLPrompt();
       }
-      const prompt = await this.getAdsNLPrompt();
+      const prompt = await this.getNLPrompt();
       const result = await window.electronAPI.llmTranslateToAds(nlInput, prompt);
 
       if (result.success && result.query) {
@@ -10666,35 +11041,44 @@ class ADSReader {
 
     if (wasHidden) {
       // Load current prompt into textarea
-      this.loadAdsNLPrompt();
+      this.loadNLPrompt();
     } else {
       // Save prompt when closing
-      this.saveAdsNLPrompt();
+      this.saveNLPrompt();
     }
   }
 
-  async loadAdsNLPrompt() {
-    const prompt = await window.electronAPI.getAdsNLPrompt();
+  async loadNLPrompt() {
+    const pluginId = this.currentSearchSource || 'ads';
+    const prompt = await window.electronAPI.getNLPrompt(pluginId);
     document.getElementById('ads-nl-prompt-textarea').value = prompt;
   }
 
-  async saveAdsNLPrompt() {
+  async saveNLPrompt() {
+    const pluginId = this.currentSearchSource || 'ads';
     const prompt = document.getElementById('ads-nl-prompt-textarea').value.trim();
     if (prompt) {
-      await window.electronAPI.setAdsNLPrompt(prompt);
+      await window.electronAPI.setNLPrompt(pluginId, prompt);
     }
   }
 
-  async getAdsNLPrompt() {
-    return await window.electronAPI.getAdsNLPrompt();
+  async getNLPrompt() {
+    const pluginId = this.currentSearchSource || 'ads';
+    return await window.electronAPI.getNLPrompt(pluginId);
   }
 
   async resetAdsNLPrompt() {
-    const result = await window.electronAPI.resetAdsNLPrompt();
+    const pluginId = this.currentSearchSource || 'ads';
+    const result = await window.electronAPI.resetNLPrompt(pluginId);
     if (result.defaultPrompt) {
       document.getElementById('ads-nl-prompt-textarea').value = result.defaultPrompt;
     }
   }
+
+  // Legacy aliases for backwards compatibility
+  async loadAdsNLPrompt() { return this.loadNLPrompt(); }
+  async saveAdsNLPrompt() { return this.saveNLPrompt(); }
+  async getAdsNLPrompt() { return this.getNLPrompt(); }
 
   // ===== LLM/AI Methods =====
 

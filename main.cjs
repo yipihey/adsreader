@@ -117,6 +117,11 @@ const bibtex = require('./src/main/bibtex.cjs');
 const { OllamaService, PROMPTS, chunkText, cosineSimilarity, parseSummaryResponse, parseMetadataResponse } = require('./src/main/llm-service.cjs');
 const { CloudLLMService, PROVIDERS: CLOUD_PROVIDERS } = require('./src/main/cloud-llm-service.cjs');
 
+// Plugin System
+const { pluginManager } = require('./src/lib/plugins/manager.cjs');
+const { adsPlugin } = require('./src/plugins/ads/index.cjs');
+const arxivPlugin = require('./src/plugins/arxiv/index.cjs');
+
 /**
  * Clean a DOI by removing common garbage suffixes and malformed paths
  * @param {string} doi - Raw DOI string
@@ -4402,8 +4407,9 @@ ipcMain.handle('reset-summary-prompt', async () => {
   return { success: true, defaultPrompt: PROMPTS.summarize.system };
 });
 
-// Default prompt for natural language to ADS query translation
-const DEFAULT_ADS_NL_PROMPT = `You translate a user's natural-language request about scholarly literature into one ADS search query string. Use ADS field syntax and Boolean logic.
+// Default prompts for natural language to search query translation (per plugin)
+const DEFAULT_NL_PROMPTS = {
+  ads: `You translate a user's natural-language request about scholarly literature into one ADS search query string. Use ADS field syntax and Boolean logic.
 
 IMPORTANT: "recent papers" or "recent" ALWAYS means year:2025- (current year onward).
 
@@ -4422,7 +4428,40 @@ Build a single Boolean expression using:
 Prefer precise fields when the user's intent is clear; otherwise let ADS use unfielded search.
 Keep the query as short as possible while preserving the constraints.
 
-Output only the final ADS query string, no explanation.`;
+Output only the final ADS query string, no explanation.`,
+
+  arxiv: `You translate a user's natural-language request about scholarly literature into one arXiv search query string. Use arXiv API field syntax and Boolean logic.
+
+arXiv Field Prefixes:
+- ti: (title)
+- au: (author - just last name works best)
+- abs: (abstract)
+- cat: (category, e.g. cs.AI, astro-ph.GA, hep-th, math.AG)
+- all: (all fields)
+
+Boolean operators (MUST be uppercase):
+- AND (both terms required)
+- OR (either term)
+- ANDNOT (exclude term)
+
+Common arXiv categories:
+- Physics: astro-ph, hep-th, hep-ph, hep-ex, gr-qc, quant-ph, cond-mat, nucl-th
+- Astrophysics subcategories: astro-ph.GA (galaxies), astro-ph.CO (cosmology), astro-ph.SR (stellar), astro-ph.HE (high energy), astro-ph.EP (exoplanets)
+- Computer Science: cs.AI, cs.LG, cs.CL, cs.CV, cs.NE, cs.RO
+- Math: math.AG, math.NT, math.CO
+
+Examples:
+- "papers on neural networks" → ti:"neural network" OR abs:"neural network"
+- "LeCun's papers on deep learning" → au:lecun AND (ti:"deep learning" OR abs:"deep learning")
+- "cosmology papers" → cat:astro-ph.CO
+- "machine learning for astronomy" → (ti:"machine learning" OR abs:"machine learning") AND cat:astro-ph
+
+Keep the query concise. Use quotes for multi-word phrases.
+Output only the final arXiv query string, no explanation.`
+};
+
+// Backwards compatibility alias
+const DEFAULT_ADS_NL_PROMPT = DEFAULT_NL_PROMPTS.ads;
 
 // Handler: Translate natural language to ADS query
 ipcMain.handle('llm-translate-to-ads', async (event, text, systemPrompt) => {
@@ -4462,26 +4501,64 @@ ipcMain.handle('llm-translate-to-ads', async (event, text, systemPrompt) => {
   }
 });
 
-// Handler: Get ADS NL prompt
+// Handler: Get ADS NL prompt (legacy, redirects to plugin-specific)
 ipcMain.handle('get-ads-nl-prompt', async () => {
-  const config = store.get('llmConfig');
-  return config.adsNLPrompt || DEFAULT_ADS_NL_PROMPT;
+  const config = store.get('llmConfig') || {};
+  return config.adsNLPrompt || DEFAULT_NL_PROMPTS.ads;
 });
 
-// Handler: Set ADS NL prompt
+// Handler: Set ADS NL prompt (legacy, redirects to plugin-specific)
 ipcMain.handle('set-ads-nl-prompt', async (event, prompt) => {
-  const config = store.get('llmConfig');
+  const config = store.get('llmConfig') || {};
   config.adsNLPrompt = prompt;
   store.set('llmConfig', config);
   return { success: true };
 });
 
-// Handler: Reset ADS NL prompt
+// Handler: Reset ADS NL prompt (legacy, redirects to plugin-specific)
 ipcMain.handle('reset-ads-nl-prompt', async () => {
-  const config = store.get('llmConfig');
+  const config = store.get('llmConfig') || {};
   config.adsNLPrompt = null;
   store.set('llmConfig', config);
-  return { success: true, defaultPrompt: DEFAULT_ADS_NL_PROMPT };
+  return { success: true, defaultPrompt: DEFAULT_NL_PROMPTS.ads };
+});
+
+// Handler: Get NL prompt for a specific plugin
+ipcMain.handle('get-nl-prompt', async (event, pluginId) => {
+  const config = store.get('llmConfig') || {};
+  const nlPrompts = config.nlPrompts || {};
+
+  // Plugin-specific custom prompt takes priority
+  if (nlPrompts[pluginId]) {
+    return nlPrompts[pluginId];
+  }
+
+  // Legacy fallback for ADS
+  if (pluginId === 'ads' && config.adsNLPrompt) {
+    return config.adsNLPrompt;
+  }
+
+  // Return default for plugin
+  return DEFAULT_NL_PROMPTS[pluginId] || DEFAULT_NL_PROMPTS.ads;
+});
+
+// Handler: Set NL prompt for a specific plugin
+ipcMain.handle('set-nl-prompt', async (event, { pluginId, prompt }) => {
+  const config = store.get('llmConfig') || {};
+  if (!config.nlPrompts) config.nlPrompts = {};
+  config.nlPrompts[pluginId] = prompt;
+  store.set('llmConfig', config);
+  return { success: true };
+});
+
+// Handler: Reset NL prompt for a specific plugin
+ipcMain.handle('reset-nl-prompt', async (event, pluginId) => {
+  const config = store.get('llmConfig') || {};
+  if (config.nlPrompts && config.nlPrompts[pluginId]) {
+    delete config.nlPrompts[pluginId];
+    store.set('llmConfig', config);
+  }
+  return { success: true, defaultPrompt: DEFAULT_NL_PROMPTS[pluginId] || DEFAULT_NL_PROMPTS.ads };
 });
 
 ipcMain.handle('llm-summarize', async (event, paperId, options = {}) => {
@@ -6510,13 +6587,19 @@ ipcMain.handle('reading-list-get', async (event, { bibcode }) => {
 // Add paper to reading list (with optional PDF download)
 ipcMain.handle('reading-list-add', async (event, { paper, downloadPdf = true }) => {
   try {
+    // Use bibcode or arxivId as identifier
+    const paperId = paper.bibcode || paper.arxivId;
+    if (!paperId) {
+      return { success: false, error: 'Paper has no identifier (bibcode or arxivId)' };
+    }
+
     // Check if already in library
     if (paper.bibcode && database.getPaperByBibcode(paper.bibcode)) {
       return { success: false, error: 'Paper is already in library' };
     }
 
     // Check if already in reading list
-    if (paper.bibcode && database.isInReadingList(paper.bibcode)) {
+    if (database.isInReadingList(paperId)) {
       return { success: false, error: 'Paper is already in reading list' };
     }
 
@@ -6528,28 +6611,50 @@ ipcMain.handle('reading-list-add', async (event, { paper, downloadPdf = true }) 
     // Download PDF if requested
     if (downloadPdf && cache) {
       // Try to get PDF from temp cache first
-      const tempEntry = tempPdfCache.get(paper.bibcode);
+      const tempEntry = tempPdfCache.get(paperId);
       if (tempEntry) {
-        pdfPath = cache.save(paper.bibcode, tempEntry.data, tempEntry.source);
+        pdfPath = cache.save(paperId, tempEntry.data, tempEntry.source);
         pdfSource = tempEntry.source;
-        relativePath = cache.getRelativePath(paper.bibcode, pdfSource);
-        sendConsoleLog(`Saved PDF from temp cache to reading list: ${paper.bibcode}`, 'info');
+        relativePath = cache.getRelativePath(paperId, pdfSource);
+        sendConsoleLog(`Saved PDF from temp cache to reading list: ${paperId}`, 'info');
       } else {
-        // Download new PDF
-        const proxyUrl = store.get('library_proxy_url', '');
-        const result = await tempPdfCache.downloadForPaper(paper, proxyUrl);
-        if (result.success) {
-          pdfPath = cache.save(paper.bibcode, result.data, result.source);
-          pdfSource = result.source;
-          relativePath = cache.getRelativePath(paper.bibcode, pdfSource);
-          sendConsoleLog(`Downloaded PDF for reading list: ${paper.bibcode}`, 'info');
+        // Download new PDF - for arXiv, we can download directly
+        if (paper.arxivId && !paper.bibcode) {
+          // Direct arXiv PDF download
+          const pdfUrl = `https://arxiv.org/pdf/${paper.arxivId}.pdf`;
+          try {
+            const response = await fetch(pdfUrl, {
+              headers: { 'User-Agent': 'ADS-Reader/1.0' },
+              redirect: 'follow'
+            });
+            if (response.ok) {
+              const buffer = Buffer.from(await response.arrayBuffer());
+              pdfPath = cache.save(paperId, buffer, 'EPRINT_PDF');
+              pdfSource = 'EPRINT_PDF';
+              relativePath = cache.getRelativePath(paperId, pdfSource);
+              sendConsoleLog(`Downloaded arXiv PDF for reading list: ${paperId}`, 'info');
+            }
+          } catch (e) {
+            sendConsoleLog(`Failed to download arXiv PDF: ${e.message}`, 'warn');
+          }
+        } else {
+          // Use existing download logic for ADS papers
+          const proxyUrl = store.get('library_proxy_url', '');
+          const result = await tempPdfCache.downloadForPaper(paper, proxyUrl);
+          if (result.success) {
+            pdfPath = cache.save(paperId, result.data, result.source);
+            pdfSource = result.source;
+            relativePath = cache.getRelativePath(paperId, pdfSource);
+            sendConsoleLog(`Downloaded PDF for reading list: ${paperId}`, 'info');
+          }
         }
       }
     }
 
-    // Add to database
+    // Add to database - use paperId as bibcode for reading list
     const id = database.addToReadingList({
       ...paper,
+      bibcode: paperId, // Use unified identifier
       pdf_path: relativePath,
       pdf_source: pdfSource
     });
@@ -6575,12 +6680,18 @@ ipcMain.handle('reading-list-add-batch', async (event, { papers, downloadPdf = t
 
   // Filter out papers already in library or reading list
   const papersToAdd = papers.filter(paper => {
-    if (paper.bibcode && database.getPaperByBibcode(paper.bibcode)) {
-      results.skipped.push({ bibcode: paper.bibcode, reason: 'Already in library' });
+    // Use unified identifier (bibcode for ADS, arxivId for arXiv)
+    const paperId = paper.bibcode || paper.arxivId;
+    if (!paperId) {
+      results.failed.push({ id: 'unknown', reason: 'No identifier (bibcode or arxivId)' });
       return false;
     }
-    if (paper.bibcode && database.isInReadingList(paper.bibcode)) {
-      results.skipped.push({ bibcode: paper.bibcode, reason: 'Already in reading list' });
+    if (paper.bibcode && database.getPaperByBibcode(paper.bibcode)) {
+      results.skipped.push({ id: paperId, reason: 'Already in library' });
+      return false;
+    }
+    if (database.isInReadingList(paperId)) {
+      results.skipped.push({ id: paperId, reason: 'Already in reading list' });
       return false;
     }
     return true;
@@ -6600,41 +6711,60 @@ ipcMain.handle('reading-list-add-batch', async (event, { papers, downloadPdf = t
 
     const batchResults = await Promise.all(
       batch.map(async (paper) => {
+        // Use unified identifier (bibcode for ADS, arxivId for arXiv)
+        const paperId = paper.bibcode || paper.arxivId;
+
         try {
           const cache = getReadingListCache();
           let pdfPath = null, pdfSource = null, relativePath = null;
 
           if (downloadPdf && cache) {
             // Check temp cache first (already downloaded during search)
-            const tempEntry = tempPdfCache.get(paper.bibcode);
+            const tempEntry = tempPdfCache.get(paperId);
             if (tempEntry) {
-              pdfPath = cache.save(paper.bibcode, tempEntry.data, tempEntry.source);
+              pdfPath = cache.save(paperId, tempEntry.data, tempEntry.source);
               pdfSource = tempEntry.source;
-              relativePath = cache.getRelativePath(paper.bibcode, pdfSource);
-              sendConsoleLog(`Saved ${paper.bibcode} from temp cache`, 'info');
+              relativePath = cache.getRelativePath(paperId, pdfSource);
+              sendConsoleLog(`Saved ${paperId} from temp cache`, 'info');
+            } else if (paper.arxivId && !paper.bibcode) {
+              // arXiv paper - download directly from arXiv
+              try {
+                const pdfUrl = `https://arxiv.org/pdf/${paper.arxivId}.pdf`;
+                const response = await fetch(pdfUrl);
+                if (response.ok) {
+                  const data = Buffer.from(await response.arrayBuffer());
+                  pdfPath = cache.save(paperId, data, 'ARXIV');
+                  pdfSource = 'ARXIV';
+                  relativePath = cache.getRelativePath(paperId, pdfSource);
+                  sendConsoleLog(`Downloaded ${paperId} from arXiv`, 'info');
+                }
+              } catch (pdfErr) {
+                sendConsoleLog(`Failed to download PDF for ${paperId}: ${pdfErr.message}`, 'warn');
+              }
             } else {
-              // Download new PDF
+              // ADS paper - use standard download
               const proxyUrl = store.get('library_proxy_url', '');
               const result = await tempPdfCache.downloadForPaper(paper, proxyUrl);
               if (result.success) {
-                pdfPath = cache.save(paper.bibcode, result.data, result.source);
+                pdfPath = cache.save(paperId, result.data, result.source);
                 pdfSource = result.source;
-                relativePath = cache.getRelativePath(paper.bibcode, pdfSource);
-                sendConsoleLog(`Downloaded ${paper.bibcode}`, 'info');
+                relativePath = cache.getRelativePath(paperId, pdfSource);
+                sendConsoleLog(`Downloaded ${paperId}`, 'info');
               }
             }
           }
 
           const id = database.addToReadingList({
             ...paper,
+            bibcode: paperId, // Use unified identifier as bibcode for database
             pdf_path: relativePath,
             pdf_source: pdfSource
           });
 
-          return { success: true, bibcode: paper.bibcode, id, pdfPath };
+          return { success: true, id: paperId, bibcode: paperId, pdfPath };
         } catch (error) {
-          console.error(`Error adding ${paper.bibcode} to reading list:`, error);
-          return { success: false, bibcode: paper.bibcode, error: error.message };
+          console.error(`Error adding ${paperId} to reading list:`, error);
+          return { success: false, id: paperId, bibcode: paperId, error: error.message };
         }
       })
     );
@@ -6777,6 +6907,194 @@ ipcMain.handle('reading-list-promote', async (event, { bibcode }) => {
 ipcMain.handle('reading-list-check-bibcodes', async (event, { bibcodes }) => {
   return database.checkBibcodesInReadingList(bibcodes);
 });
+
+// =============================================================================
+// Plugin System IPC Handlers
+// =============================================================================
+
+/**
+ * Get list of all registered plugins with their info
+ * Returns: Array of { id, name, icon, description, active, enabled, capabilities, auth }
+ */
+ipcMain.handle('plugin:list', async () => {
+  try {
+    const plugins = pluginManager.getPluginInfo();
+    return { success: true, data: plugins };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+/**
+ * Get the currently active plugin
+ * Returns: { id, name, icon } or null if no active plugin
+ */
+ipcMain.handle('plugin:get-active', async () => {
+  try {
+    const plugin = pluginManager.getActive();
+    if (!plugin) {
+      return { success: true, data: null };
+    }
+    return {
+      success: true,
+      data: {
+        id: plugin.id,
+        name: plugin.name,
+        icon: plugin.icon || ''
+      }
+    };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+/**
+ * Set the active plugin
+ * Args: { pluginId: string }
+ * Returns: { success: true }
+ */
+ipcMain.handle('plugin:set-active', async (event, { pluginId }) => {
+  try {
+    pluginManager.setActive(pluginId);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+/**
+ * Search using active or specified plugin
+ * Args: { query: UnifiedQuery, pluginId?: string }
+ * Returns: SearchResult { papers, totalResults, nextCursor?, metadata? }
+ */
+ipcMain.handle('plugin:search', async (event, { query, pluginId }) => {
+  try {
+    let result;
+    if (pluginId) {
+      // Use specific plugin
+      const plugin = pluginManager.get(pluginId);
+      if (!plugin) {
+        return { success: false, error: `Plugin "${pluginId}" not found` };
+      }
+      if (!plugin.capabilities.search) {
+        return { success: false, error: `Plugin "${pluginId}" does not support search` };
+      }
+      result = await plugin.search(query);
+      // Tag results with source
+      result.papers = result.papers.map(p => ({ ...p, source: plugin.id }));
+    } else {
+      // Use active plugin via manager (includes rate limiting)
+      result = await pluginManager.search(query);
+    }
+    return { success: true, data: result };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+/**
+ * Lookup a paper by identifier (DOI, arXiv ID, bibcode, etc.)
+ * Args: { identifier: string }
+ * Returns: Paper | null
+ */
+ipcMain.handle('plugin:lookup', async (event, { identifier }) => {
+  try {
+    const paper = await pluginManager.lookup(identifier);
+    return { success: true, data: paper };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+/**
+ * Get available PDF sources for a paper
+ * Args: { paper: Paper } - Paper object with source and sourceId
+ * Returns: PdfSource[]
+ */
+ipcMain.handle('plugin:get-pdf-sources', async (event, { paper }) => {
+  try {
+    const sources = await pluginManager.getPdfSources(paper);
+    return { success: true, data: sources };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+/**
+ * Get references for a paper
+ * Args: { pluginId: string, sourceId: string }
+ * Returns: Paper[]
+ */
+ipcMain.handle('plugin:get-references', async (event, { pluginId, sourceId }) => {
+  try {
+    const plugin = pluginManager.get(pluginId);
+    if (!plugin) {
+      return { success: false, error: `Plugin "${pluginId}" not found` };
+    }
+    if (!plugin.capabilities.references) {
+      return { success: false, error: `Plugin "${pluginId}" does not support references` };
+    }
+    if (typeof plugin.getReferences !== 'function') {
+      return { success: false, error: `Plugin "${pluginId}" has no getReferences method` };
+    }
+    const references = await plugin.getReferences(sourceId);
+    return { success: true, data: references };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+/**
+ * Get citations (papers that cite this paper)
+ * Args: { pluginId: string, sourceId: string }
+ * Returns: Paper[]
+ */
+ipcMain.handle('plugin:get-citations', async (event, { pluginId, sourceId }) => {
+  try {
+    const plugin = pluginManager.get(pluginId);
+    if (!plugin) {
+      return { success: false, error: `Plugin "${pluginId}" not found` };
+    }
+    if (!plugin.capabilities.citations) {
+      return { success: false, error: `Plugin "${pluginId}" does not support citations` };
+    }
+    if (typeof plugin.getCitations !== 'function') {
+      return { success: false, error: `Plugin "${pluginId}" has no getCitations method` };
+    }
+    const citations = await plugin.getCitations(sourceId);
+    return { success: true, data: citations };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+/**
+ * Get BibTeX for a paper
+ * Args: { pluginId: string, sourceId: string }
+ * Returns: string (BibTeX entry)
+ */
+ipcMain.handle('plugin:get-bibtex', async (event, { pluginId, sourceId }) => {
+  try {
+    const plugin = pluginManager.get(pluginId);
+    if (!plugin) {
+      return { success: false, error: `Plugin "${pluginId}" not found` };
+    }
+    if (!plugin.capabilities.bibtex) {
+      return { success: false, error: `Plugin "${pluginId}" does not support BibTeX export` };
+    }
+    if (typeof plugin.getBibtex !== 'function') {
+      return { success: false, error: `Plugin "${pluginId}" has no getBibtex method` };
+    }
+    const bibtexStr = await plugin.getBibtex(sourceId);
+    return { success: true, data: bibtexStr };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// =============================================================================
+// End Plugin System IPC Handlers
+// =============================================================================
 
 // Create application menu
 function createApplicationMenu() {
@@ -7120,6 +7438,19 @@ app.whenReady().then(() => {
 
   createApplicationMenu();
   createWindow();
+
+  // Initialize plugin system
+  try {
+    pluginManager.register(adsPlugin);
+    pluginManager.register(arxivPlugin);
+  } catch (err) {
+    console.error('[PluginManager] Failed to register plugins:', err);
+  }
+  pluginManager.initialize().then(() => {
+    console.log('[PluginManager] Plugin system initialized');
+  }).catch(err => {
+    console.error('[PluginManager] Failed to initialize:', err);
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

@@ -189,7 +189,8 @@ class FileManager {
       await this.createSymlink(paperId, { ...fileData, id: fileId }, bibcode);
     }
 
-    return { id: fileId, ...fileData };
+    // Return with computed path for immediate use
+    return { id: fileId, path: destPath, ...fileData };
   }
 
   /**
@@ -403,7 +404,19 @@ class FileManager {
     // Add the computed path for convenience
     // Try content-addressed storage first (files with file_hash)
     if (fileRecord.file_hash && fileRecord.filename) {
-      fileRecord.path = this.getStoragePath(fileRecord);
+      const storagePath = this.getStoragePath(fileRecord);
+      if (fs.existsSync(storagePath)) {
+        fileRecord.path = storagePath;
+      } else {
+        // Content-addressed file missing, try papers/ fallback
+        const papersPath = path.join(this.papersDir, fileRecord.filename);
+        if (fs.existsSync(papersPath)) {
+          fileRecord.path = papersPath;
+        } else {
+          console.warn(`[FileManager] File not found: ${storagePath}`);
+          fileRecord.path = null;
+        }
+      }
     } else if (fileRecord.filename) {
       // Fallback: files stored directly in papers/ directory (download pattern)
       // Files are stored as: papers/BIBCODE_SOURCETYPE.pdf
